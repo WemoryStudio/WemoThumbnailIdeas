@@ -905,6 +905,9 @@
     border-bottom-left-radius:var(--card-radius);
     border-bottom-right-radius:var(--card-radius);
     z-index:0;
+    /* guarantees the shimmer's mix-blend-mode only ever blends against
+       bg-blur/bg-tint inside this zone, never anything outside it */
+    isolation:isolate;
   }
   .info-bar-blur-zone .bg-blur{
     position:absolute; inset:-8px;
@@ -953,9 +956,9 @@
   .info-bar-blur-zone .shimmer::after{
     content:"";
     position:absolute;
-    top:-60%;
+    top:-30%;
     left:var(--mx);
-    height:220%;
+    height:160%;
     transform:translateX(-50%) skewX(-20deg);
     mix-blend-mode:soft-light;
     filter:blur(10px);
@@ -3522,8 +3525,13 @@
       if(!zone) return;
       const rect = zone.getBoundingClientRect();
       if(rect.width <= 0 || rect.height <= 0) return;
-      const xPct = ((e.clientX - rect.left) / rect.width) * 100;
-      const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+      // Clamped well inside the zone (not 0-100) - right at the edge, the
+      // skewed shimmer bar's clipped cross-section reads as a much bigger,
+      // brighter flare instead of the same soft glow it is everywhere else.
+      const rawX = ((e.clientX - rect.left) / rect.width) * 100;
+      const rawY = ((e.clientY - rect.top) / rect.height) * 100;
+      const xPct = Math.max(12, Math.min(88, rawX));
+      const yPct = Math.max(12, Math.min(88, rawY));
       card.style.setProperty("--mx", `${xPct}%`);
       card.style.setProperty("--my", `${yPct}%`);
     }
