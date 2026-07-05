@@ -4493,6 +4493,17 @@
       orbitBoost = Math.min(ORBIT_BOOST_MAX, orbitBoost + ORBIT_BOOST_STEP);
     }, {passive:true});
 
+    // Rule: while the 16-card ring is orbiting, the main round wave must
+    // stay exactly centered inside it. refreshMainWaveTarget() is already
+    // called at every known trigger (orbit start, geometry changes, window
+    // resize), but that only covers cases already anticipated - this is a
+    // continuous, low-cost backstop so the centering holds as a standing
+    // guarantee rather than something that can only be trusted right after
+    // one of those specific triggers. Throttled (not every frame) since it
+    // forces a layout read via getBoundingClientRect.
+    let lastWaveResyncT = 0;
+    const WAVE_RESYNC_INTERVAL = 400; // ms
+
     function orbitSpinTick(t){
       const dt = orbitLastT === null ? 16 : Math.min(48, t - orbitLastT);
       orbitLastT = t;
@@ -4500,6 +4511,11 @@
       orbitAngle += (ORBIT_BASE_SPEED + orbitBoost) * dt;
 
       if(orbitModeOn){
+        if(t - lastWaveResyncT > WAVE_RESYNC_INTERVAL){
+          lastWaveResyncT = t;
+          refreshMainWaveTarget();
+        }
+
         const boostRatio = Math.min(1, orbitBoost / ORBIT_BOOST_MAX);
         previewGrid.style.setProperty("--orbit-brightness", (ORBIT_BASE_BRIGHTNESS + boostRatio * ORBIT_BOOST_BRIGHTNESS).toFixed(3));
 
