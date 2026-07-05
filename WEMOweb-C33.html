@@ -957,11 +957,16 @@
     content:"";
     position:absolute;
     top:-30%;
-    left:var(--mx);
+    left:0;
     height:160%;
-    transform:translateX(-50%) skewX(-20deg);
+    /* translateX (not `left`) for position - `left` triggers a layout
+       recalc on every single mousemove update, which combined with the
+       filter+blend-mode below was visibly flickering/stuttering instead of
+       gliding smoothly. transform is compositor-only, no layout cost. */
+    transform:translateX(calc(var(--mx) - 50%)) skewX(-20deg);
     mix-blend-mode:soft-light;
     filter:blur(10px);
+    will-change:transform;
   }
   .info-bar-blur-zone .shimmer::before{
     width:56%;
@@ -3532,7 +3537,10 @@
       const rawY = ((e.clientY - rect.top) / rect.height) * 100;
       const xPct = Math.max(12, Math.min(88, rawX));
       const yPct = Math.max(12, Math.min(88, rawY));
-      card.style.setProperty("--mx", `${xPct}%`);
+      // In px (not %): the shimmer positions itself via transform:translateX
+      // now instead of `left`, and translateX's own percentages resolve
+      // against the element's own box, not the container - px sidesteps that.
+      card.style.setProperty("--mx", `${(xPct / 100) * rect.width}px`);
       card.style.setProperty("--my", `${yPct}%`);
     }
     card.addEventListener("mouseenter", updatePosition);
