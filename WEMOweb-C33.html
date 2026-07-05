@@ -841,11 +841,22 @@
     #previewGrid.orbit-mode .preview-card{width:100px;}
   }
 
+  /* Registering --mx as an animatable <length> lets the browser natively
+     interpolate it (and therefore the shimmer's transform, which reads it)
+     between mousemove updates instead of snapping instantly to each new
+     value - that instant snapping between discrete positions, dozens of
+     times a second, is what was actually reading as flicker. */
+  @property --mx{
+    syntax:'<length>';
+    inherits:true;
+    initial-value:0px;
+  }
+
   .card{
     position:relative; background:var(--bg); border-radius:var(--card-radius);
     overflow:hidden; border:1px solid transparent;
     transition:transform .18s ease, border-color .18s ease, box-shadow .18s ease;
-    --mx:50%; --my:50%;
+    --mx:0px; --my:50%;
   }
 
   /* one-time entrance for competitor cards the moment placing mode opens
@@ -964,6 +975,7 @@
        filter+blend-mode below was visibly flickering/stuttering instead of
        gliding smoothly. transform is compositor-only, no layout cost. */
     transform:translateX(calc(var(--mx) - 50%)) skewX(-20deg);
+    transition:transform .08s linear;
     mix-blend-mode:soft-light;
     filter:blur(10px);
     will-change:transform;
@@ -3525,9 +3537,21 @@
   // whole card) so the shimmer glow's --mx/--my line up accurately with
   // where the cursor actually is within the visible effect area.
   function attachShimmerTracking(card){
-    function updatePosition(e){
-      const zone = card.querySelector(".info-bar-blur-zone");
-      if(!zone) return;
+    // Cached once instead of re-querying on every mousemove, and the actual
+    // rect-read + style-write is deferred to a single rAF callback per
+    // frame (mousemove can fire far more often than the screen refreshes) -
+    // doing both the read (getBoundingClientRect, which forces a synchronous
+    // layout flush) and the write on every raw event was thrashing layout
+    // dozens of times a second, which is what actually read as flickering,
+    // not the shimmer's own rendering.
+    let zone = null;
+    let pendingEvent = null;
+    let rafId = null;
+
+    function applyPosition(){
+      rafId = null;
+      const e = pendingEvent;
+      if(!zone || !e) return;
       const rect = zone.getBoundingClientRect();
       if(rect.width <= 0 || rect.height <= 0) return;
       // Clamped well inside the zone (not 0-100) - right at the edge, the
@@ -3543,8 +3567,15 @@
       card.style.setProperty("--mx", `${(xPct / 100) * rect.width}px`);
       card.style.setProperty("--my", `${yPct}%`);
     }
-    card.addEventListener("mouseenter", updatePosition);
-    card.addEventListener("mousemove", updatePosition);
+
+    function queuePosition(e){
+      if(!zone) zone = card.querySelector(".info-bar-blur-zone");
+      pendingEvent = e;
+      if(rafId === null) rafId = requestAnimationFrame(applyPosition);
+    }
+
+    card.addEventListener("mouseenter", queuePosition);
+    card.addEventListener("mousemove", queuePosition, {passive:true});
   }
 
   function openLightbox(videoId){
