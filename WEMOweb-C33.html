@@ -928,29 +928,54 @@
       rgba(10,10,11,0.65) 100%
     );
   }
-  /* diagonal glare streak (same look as #uploadDesignBtn's shine) instead
-     of a fixed timed sweep — its position is driven by the --mx custom
-     property updated live via JS mousemove (attachShimmerTracking), so the
-     streak actually tracks the cursor across the blurred area instead of
-     auto-looping on a timer. */
+  /* Glass-sheen glare, same skewed-bar technique as #uploadDesignBtn's shine
+     (a separate element positioned via `left`, tilted via transform:skewX)
+     instead of encoding position through gradient-angle color stops — that
+     coupled the tilt angle to the apparent left/right position, so the
+     streak's motion didn't track the cursor 1:1. `left` alone now carries
+     position (driven by --mx, updated live via JS mousemove /
+     attachShimmerTracking); the skew is purely cosmetic tilt on top.
+     Two layers for a less flat, more "polished glass" look: a soft wide
+     glow tinted faintly toward the brand accent, plus a slim brighter core
+     hairline — both color-dodge blended into the blurred thumbnail/tint
+     underneath rather than sitting on top as flat white. */
   .info-bar-blur-zone .shimmer{
     position:absolute; inset:0;
-    background:linear-gradient(
-      -75deg,
-      transparent calc(var(--mx) - 18%),
-      rgba(255,255,255,0.35) var(--mx),
-      transparent calc(var(--mx) + 18%)
-    );
-    /* color-dodge blends the streak into whatever's underneath (the blurred
-       thumbnail + dark tint) instead of sitting on top as a flat white
-       stripe — same idea as Photoshop's Color Dodge blend mode. */
-    mix-blend-mode:color-dodge;
+    overflow:hidden;
     opacity:0;
     pointer-events:none;
-    transition:opacity .15s ease;
+    transition:opacity .2s ease;
   }
   .card:hover .info-bar-blur-zone .shimmer{
     opacity:1;
+  }
+  .info-bar-blur-zone .shimmer::before,
+  .info-bar-blur-zone .shimmer::after{
+    content:"";
+    position:absolute;
+    top:-60%;
+    left:var(--mx);
+    height:220%;
+    transform:translateX(-50%) skewX(-20deg);
+    mix-blend-mode:color-dodge;
+  }
+  .info-bar-blur-zone .shimmer::before{
+    width:46%;
+    background:linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(219,159,245,0.30) 50%,
+      transparent 100%
+    );
+  }
+  .info-bar-blur-zone .shimmer::after{
+    width:10%;
+    background:linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255,255,255,0.55) 50%,
+      transparent 100%
+    );
   }
   /* thin shadow right where the thumbnail meets the info-bar. Starts at
      blur-zone's own top (synced with blur/outline, covering the corner
