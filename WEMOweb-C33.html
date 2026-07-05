@@ -1502,8 +1502,8 @@
       </div>
       <div class="tabs">
         <button class="tab-btn active" data-tab="search" id="tabSearchBtn">Explorer</button>
-        <button class="tab-btn" data-tab="board" id="tabBoardBtn">My Boards</button>
         <button class="tab-btn" data-tab="preview" id="tabPreviewBtn">Preview</button>
+        <button class="tab-btn" data-tab="board" id="tabBoardBtn">My Boards</button>
       </div>
       <div class="stats">
         <button class="gear-btn" id="gearBtn" title="Settings"><span class="gear-label">Settings</span></button>
@@ -2066,7 +2066,12 @@
       throw err;
     }
 
-    if(resp.status === 401){
+    // A 401 from /auth/login or /auth/register just means "wrong
+    // credentials" (those endpoints don't even require a token) - only treat
+    // a 401 from every OTHER endpoint as an expired/invalid session, since
+    // that's the only case it actually means that.
+    const isAuthEndpoint = path.startsWith("/auth/login") || path.startsWith("/auth/register");
+    if(resp.status === 401 && !isAuthEndpoint){
       clearAuthToken();
       showAuthOverlay();
       const err = new Error("Session expired, please log in again.");
@@ -2427,6 +2432,10 @@
     const previewRestored = window.__loadPreviewState ? window.__loadPreviewState() : Promise.resolve();
 
     await Promise.all([boardsAndItemsLoaded, explorerRestored, previewRestored]);
+
+    // Show whichever tab was active before this refresh (defaults to
+    // Explorer, already active in the markup, if none was saved).
+    if(window.__restoreActiveTab) window.__restoreActiveTab();
   }
 
   // On page load: if a token is already stored, verify it still works before
@@ -2536,38 +2545,62 @@
   let savedScrollPositions = { search: 0, board: 0, preview: 0 };
   const previewWrap = document.getElementById("previewWrap");
 
-  document.querySelectorAll(".tab-btn").forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      const previousTab = document.querySelector(".tab-btn.active");
-      const previousTabKey = previousTab ? previousTab.dataset.tab : null;
-      if(previousTabKey){
-        savedScrollPositions[previousTabKey] = window.scrollY;
-      }
-      if(previousTabKey === "preview" && window.__previewOrbitScrollSync) window.__previewOrbitScrollSync.onLeaveTab();
+  // Pulled out of the click handler so the same tab-switch logic can also
+  // run on page load to restore whichever tab the user had open before
+  // refreshing, instead of always landing back on Explorer.
+  function activateTab(tab, opts){
+    opts = opts || {};
+    const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+    if(!btn) return;
 
-      document.querySelectorAll(".tab-btn").forEach(b=>b.classList.remove("active"));
-      document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
-      btn.classList.add("active");
-      document.getElementById("panel-" + btn.dataset.tab).classList.add("active");
-      const tab = btn.dataset.tab;
-      searchResultsWrap.style.display = (tab === "search") ? "block" : "none";
-      boardWrap.style.display = (tab === "board") ? "block" : "none";
-      previewWrap.style.display = (tab === "preview") ? "block" : "none";
-      if(tab === "board") renderBoard();
-      if(tab === "preview" && window.__previewOrbitScrollSync) window.__previewOrbitScrollSync.onEnterTab();
+    const previousTab = document.querySelector(".tab-btn.active");
+    const previousTabKey = previousTab ? previousTab.dataset.tab : null;
+    if(previousTabKey && !opts.isInitialLoad){
+      savedScrollPositions[previousTabKey] = window.scrollY;
+    }
+    if(previousTabKey === "preview" && previousTabKey !== tab && window.__previewOrbitScrollSync) window.__previewOrbitScrollSync.onLeaveTab();
 
+    document.querySelectorAll(".tab-btn").forEach(b=>b.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("panel-" + tab).classList.add("active");
+    searchResultsWrap.style.display = (tab === "search") ? "block" : "none";
+    boardWrap.style.display = (tab === "board") ? "block" : "none";
+    previewWrap.style.display = (tab === "preview") ? "block" : "none";
+    if(tab === "board") renderBoard();
+    if(tab === "preview" && window.__previewOrbitScrollSync) window.__previewOrbitScrollSync.onEnterTab();
+
+    try{ sessionStorage.setItem(userKey("activeTab"), tab); }catch(e){}
+
+    if(!opts.isInitialLoad){
       // restore this tab's scroll position after the layout has updated —
       // double-rAF plus a fallback timeout to survive late reflows from
       // lazy-loading images changing the page height after the switch.
-      const targetY = savedScrollPositions[btn.dataset.tab] || 0;
+      const targetY = savedScrollPositions[tab] || 0;
       requestAnimationFrame(()=>{
         requestAnimationFrame(()=>{
           window.scrollTo(0, targetY);
         });
       });
       setTimeout(()=> window.scrollTo(0, targetY), 60);
-    });
+    }
+  }
+
+  document.querySelectorAll(".tab-btn").forEach(btn=>{
+    btn.addEventListener("click", ()=> activateTab(btn.dataset.tab));
   });
+
+  // Restores whichever tab was active before a refresh - the boards/Explorer/
+  // Preview restores in loadAll() already repopulate each tab's content
+  // regardless of which one ends up visible, so it's safe to just re-pick
+  // the tab after everything settles.
+  window.__restoreActiveTab = function(){
+    let savedTab = null;
+    try{ savedTab = sessionStorage.getItem(userKey("activeTab")); }catch(e){}
+    if(savedTab && savedTab !== "search"){
+      activateTab(savedTab, { isInitialLoad: true });
+    }
+  };
 
   let settingsSnapshot = null;
 
