@@ -4496,7 +4496,11 @@
       // already starts easing down the instant the user starts typing
       const rect = orbitModeOn ? previewGrid.getBoundingClientRect() : previewWrap.getBoundingClientRect();
       if(rect && rect.height){
-        window.__setMainWaveDescendTarget(rect.top + rect.height / 2, orbitModeOn ? orbitRadius : null);
+        // Horizontal offset from the viewport's own center - the ring/preview
+        // area isn't guaranteed to sit exactly there, so this can't just be
+        // left at 0 the way it used to be.
+        const offsetX = (rect.left + rect.width / 2) - (window.innerWidth / 2);
+        window.__setMainWaveDescendTarget(rect.top + rect.height / 2, orbitModeOn ? orbitRadius : null, offsetX);
       }
     }
     previewSearchInput.addEventListener("input", requestMainWaveDescend);
@@ -5253,11 +5257,19 @@
       return Math.min(1008, window.innerWidth * 1.288);
     }
 
+    let targetX = 0, currentX = 0;
     let targetY = 0, currentY = 0;
     let targetScale = 1, currentScale = 1;
 
-    window.__setMainWaveDescendTarget = function(px, ringRadius){
+    // pxX defaults to 0 (viewport-horizontally-centered) for old callers
+    // that only ever passed (px, ringRadius) - but the ring/preview area
+    // isn't always exactly centered on the full viewport, so relying on the
+    // wave-mask's own `left:50%` alone left it visibly off to one side
+    // whenever it wasn't. refreshMainWaveTarget below now always supplies
+    // the real horizontal offset too.
+    window.__setMainWaveDescendTarget = function(px, ringRadius, pxX){
       targetY = px || 0;
+      targetX = pxX || 0;
       if(ringRadius){
         // sits clearly inside the ring rather than reaching its edge
         const desiredDiameter = ringRadius * 1.90;
@@ -5268,9 +5280,10 @@
     };
 
     function tick(){
-      currentY += (targetY - currentY) * 0.02;         // slow, graceful glide both ways
+      currentX += (targetX - currentX) * 0.02;         // slow, graceful glide both ways
+      currentY += (targetY - currentY) * 0.02;
       currentScale += (targetScale - currentScale) * 0.02;
-      const t = "translate(-50%,-50%) translateY(" + currentY + "px) scale(" + currentScale.toFixed(4) + ")";
+      const t = "translate(-50%,-50%) translateX(" + currentX + "px) translateY(" + currentY + "px) scale(" + currentScale.toFixed(4) + ")";
       layer.style.transform = t;
       if(glow) glow.style.transform = t; // glow always shares the main wave's exact center + scale
       requestAnimationFrame(tick);
