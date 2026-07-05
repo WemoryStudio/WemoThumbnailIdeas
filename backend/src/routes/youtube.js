@@ -65,8 +65,12 @@ router.get("/search", async (req, res) => {
     const pageToken = req.query.pageToken || "";
     const publishedAfter = publishedAfterParam(req.query.time);
 
+    // search.list costs a flat 100 quota units regardless of maxResults, so
+    // asking for the API's max (50) instead of a smaller page gets twice as
+    // many candidates per unit spent - fewer follow-up pages needed overall,
+    // especially once hideShorts below filters a chunk of them back out.
     let searchUrl =
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=24` +
+      `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=50` +
       `&order=${encodeURIComponent(order)}&q=${encodeURIComponent(q)}`;
     if (publishedAfter) searchUrl += `&publishedAfter=${encodeURIComponent(publishedAfter)}`;
     if (pageToken) searchUrl += `&pageToken=${encodeURIComponent(pageToken)}`;
@@ -115,9 +119,11 @@ router.get("/search", async (req, res) => {
 // to search for a topic first.
 router.get("/trending", async (req, res) => {
   try {
+    // videos.list costs a flat 1 unit no matter how many results come back,
+    // so there's no reason not to ask for the max here too.
     const url =
       "https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails" +
-      "&chart=mostPopular&regionCode=US&maxResults=24";
+      "&chart=mostPopular&regionCode=US&maxResults=50";
     const data = await fetchYoutube(url, 1);
 
     let videos = (data.items || []).map((v) => ({

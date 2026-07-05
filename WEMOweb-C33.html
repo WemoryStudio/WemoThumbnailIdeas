@@ -3814,9 +3814,19 @@
   };
   searchInput.addEventListener("keydown", (e)=>{ if(e.key === "Enter"){ e.preventDefault(); searchBtn.click(); } });
   loadMoreBtn.onclick = ()=>{ if(currentQuery) runSearch(currentQuery, true); };
+  // Debounced: flipping through a couple of filters quickly (e.g. trying
+  // each time-range option) would otherwise fire one full API round trip
+  // per click instead of just one for wherever the user actually lands.
+  let filterChangeTimer = null;
   [orderSelect, timeSelect, excludeShorts].forEach(el=>{
     el.addEventListener("change", ()=>{
-      if(currentQuery){ nextPageToken = ""; saveSearchState(); runSearch(currentQuery, false); }
+      if(!currentQuery) return;
+      clearTimeout(filterChangeTimer);
+      filterChangeTimer = setTimeout(()=>{
+        nextPageToken = "";
+        saveSearchState();
+        runSearch(currentQuery, false);
+      }, 350);
     });
   });
 
@@ -3962,6 +3972,7 @@
       const mySeq = ++pSeq;
       previewSearchBtn.disabled = true;
       previewSearchBtn.textContent = t("searchingBtn");
+      previewLoadMoreBtn.disabled = true;
 
       const order = orderSelectP.value;
       const timeValue = timeSelectP.value;
@@ -4006,6 +4017,7 @@
       if(mySeq === pSeq){
         previewSearchBtn.disabled = false;
         previewSearchBtn.textContent = t("searchBtn");
+        previewLoadMoreBtn.disabled = false;
       }
     }
 
@@ -5007,8 +5019,15 @@
     };
     previewSearchInput.addEventListener("keydown", (e)=>{ if(e.key === "Enter"){ e.preventDefault(); previewSearchBtn.click(); } });
     previewLoadMoreBtn.onclick = ()=>{ if(pQuery) runPreviewSearch(true); };
+    // Debounced for the same reason as the Explorer tab's filters - avoid
+    // one API round trip per click when flipping through options quickly.
+    let previewFilterChangeTimer = null;
     [orderSelectP, timeSelectP].forEach(el=>{
-      el.addEventListener("change", ()=>{ if(pQuery) runPreviewSearch(false); });
+      el.addEventListener("change", ()=>{
+        if(!pQuery) return;
+        clearTimeout(previewFilterChangeTimer);
+        previewFilterChangeTimer = setTimeout(()=> runPreviewSearch(false), 350);
+      });
     });
 
     // expose a tiny hook so language switches can re-render visible cards
