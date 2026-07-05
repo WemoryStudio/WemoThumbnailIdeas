@@ -958,22 +958,23 @@
     height:220%;
     transform:translateX(-50%) skewX(-20deg);
     mix-blend-mode:soft-light;
+    filter:blur(10px);
   }
   .info-bar-blur-zone .shimmer::before{
-    width:34%;
+    width:56%;
     background:linear-gradient(
       90deg,
       transparent 0%,
-      rgba(219,159,245,0.30) 50%,
+      rgba(219,159,245,0.26) 50%,
       transparent 100%
     );
   }
   .info-bar-blur-zone .shimmer::after{
-    width:7%;
+    width:16%;
     background:linear-gradient(
       90deg,
       transparent 0%,
-      rgba(255,255,255,0.4) 50%,
+      rgba(255,255,255,0.3) 50%,
       transparent 100%
     );
   }
