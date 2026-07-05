@@ -81,6 +81,13 @@
   .topbar.collapsed{
     padding-top:10px;
     padding-bottom:10px;
+  }
+  /* Darkens the header so it stays readable over bright thumbnail cards.
+     Tied purely to scroll position (see setupHeaderCollapse's "scrolled"
+     toggle) rather than scroll direction like .collapsed above - otherwise
+     scrolling up even briefly mid-page would flip the header back to its
+     light, near-transparent look meant only for the very top of the page. */
+  .topbar.scrolled{
     background:rgba(3,3,4,0.94);
     backdrop-filter:blur(16px) brightness(0.55) saturate(0.9);
     -webkit-backdrop-filter:blur(16px) brightness(0.55) saturate(0.9);
@@ -2614,6 +2621,10 @@
 
     function onScroll(){
       const y = window.scrollY;
+      // Purely position-based (not direction-based like .collapsed below),
+      // so the header stays dark/readable the instant it's anywhere but the
+      // very top - including while scrolling upward past thumbnail cards.
+      topbar.classList.toggle("scrolled", y > TOP_SAFE_ZONE);
 
       if(y <= TOP_SAFE_ZONE){
         topbar.classList.remove("collapsed");
