@@ -928,30 +928,25 @@
       rgba(10,10,11,0.65) 100%
     );
   }
-  /* soft radial glow that follows the mouse position across the blurred
-     area — sits above blur/tint but below top-shadow. Position is driven
-     by --mx/--my custom properties updated live via JS mousemove, giving
-     the "emanating from the cursor" feel instead of a fixed sweep path. */
+  /* diagonal glare streak (same look as #uploadDesignBtn's shine) instead
+     of a fixed timed sweep — its position is driven by the --mx custom
+     property updated live via JS mousemove (attachShimmerTracking), so the
+     streak actually tracks the cursor across the blurred area instead of
+     auto-looping on a timer. */
   .info-bar-blur-zone .shimmer{
     position:absolute; inset:0;
-    background:radial-gradient(
-      circle 90px at var(--mx) var(--my),
-      rgba(255,255,255,0.22) 0%,
-      rgba(255,255,255,0.10) 40%,
-      rgba(255,255,255,0) 72%
+    background:linear-gradient(
+      75deg,
+      transparent calc(var(--mx) - 18%),
+      rgba(255,255,255,0.55) var(--mx),
+      transparent calc(var(--mx) + 18%)
     );
-    filter:blur(4px);
     opacity:0;
     pointer-events:none;
     transition:opacity .15s ease;
   }
   .card:hover .info-bar-blur-zone .shimmer{
     opacity:1;
-    animation:shimmerPulse 2.2s ease-in-out infinite;
-  }
-  @keyframes shimmerPulse{
-    0%, 100%{ filter:blur(4px) brightness(1); }
-    50%{ filter:blur(7px) brightness(1.25); }
   }
   /* thin shadow right where the thumbnail meets the info-bar. Starts at
      blur-zone's own top (synced with blur/outline, covering the corner
