@@ -2318,6 +2318,23 @@
 
   renderAuthMode();
 
+  function mapItemFromApi(it){
+    return {
+      id: it.id,
+      boardId: it.board_id,
+      videoId: it.video_id,
+      addedAt: new Date(it.added_at).getTime(),
+      tags: it.tags || [],
+      title: it.title,
+      channelTitle: it.channel_title,
+      channelId: it.channel_id,
+      channelAvatar: it.channel_avatar,
+      viewCount: it.view_count === null || it.view_count === undefined ? null : Number(it.view_count),
+      subscriberCount: it.subscriber_count === null || it.subscriber_count === undefined ? null : Number(it.subscriber_count),
+      publishedAt: it.published_at
+    };
+  }
+
   async function loadAll(){
     loadingOverlay.classList.add("show");
 
@@ -2328,43 +2345,54 @@
 
     try{
       const res = await storageApi.get(userKey("pinnedBoards"), false);
-      if(res && res.value) pinnedBoardIds = JSON.parse(res.value);
-      else pinnedBoardIds = [];
+      pinnedBoardIds = (res && res.value) ? JSON.parse(res.value) : [];
     }catch(e){ pinnedBoardIds = []; }
 
+    // Paint instantly from whatever boards/items were last seen (if
+    // anything), then confirm/refresh from the server in the background —
+    // a refresh shouldn't visibly block on a network round trip just to
+    // redraw boards that were already on screen a second ago.
+    let hadBoardsCache = false;
     try{
-      const boardsData = await apiFetch("/boards");
-      boards = boardsData.boards.map(b => ({ id: b.id, name: b.name, createdAt: new Date(b.created_at).getTime() }));
-    }catch(e){ boards = []; }
+      const raw = sessionStorage.getItem(userKey("boardsCache"));
+      if(raw){
+        const cached = JSON.parse(raw);
+        boards = cached.boards || [];
+        items = cached.items || [];
+        hadBoardsCache = true;
+      }
+    }catch(e){}
 
-    try{
-      const itemsData = await apiFetch("/items");
-      items = itemsData.items.map(it => ({
-        id: it.id,
-        boardId: it.board_id,
-        videoId: it.video_id,
-        addedAt: new Date(it.added_at).getTime(),
-        tags: it.tags || [],
-        title: it.title,
-        channelTitle: it.channel_title,
-        channelId: it.channel_id,
-        channelAvatar: it.channel_avatar,
-        viewCount: it.view_count === null || it.view_count === undefined ? null : Number(it.view_count),
-        subscriberCount: it.subscriber_count === null || it.subscriber_count === undefined ? null : Number(it.subscriber_count),
-        publishedAt: it.published_at
-      }));
-    }catch(e){ items = []; }
-
-    loadingOverlay.classList.remove("show");
     applyLanguage();
     renderBoardTabs();
     renderBoard();
+    if(hadBoardsCache) loadingOverlay.classList.remove("show");
 
-    // Try to restore the Explorer grid straight from cache first - zero API
-    // calls, instant. Only falls back to an actual search (costs one API
-    // call, same as the very first time you ever search) if there's nothing
-    // cached yet, e.g. the first login on a new device/browser.
-    if(!restoreExplorerFromCache()){
+    const boardsAndItemsLoaded = Promise.all([
+      apiFetch("/boards").then(
+        (data)=>{ boards = data.boards.map(b => ({ id: b.id, name: b.name, createdAt: new Date(b.created_at).getTime() })); },
+        ()=>{ if(!hadBoardsCache) boards = []; }
+      ),
+      apiFetch("/items").then(
+        (data)=>{ items = data.items.map(mapItemFromApi); },
+        ()=>{ if(!hadBoardsCache) items = []; }
+      ),
+    ]).then(()=>{
+      try{ sessionStorage.setItem(userKey("boardsCache"), JSON.stringify({ boards, items })); }catch(e){}
+      loadingOverlay.classList.remove("show");
+      renderBoardTabs();
+      renderBoard();
+    });
+
+    // Explorer and Preview restore from their own local caches (instant, no
+    // API calls when cached) — run alongside the boards/items refresh above
+    // instead of waiting for it, so nothing blocks on anything it doesn't
+    // actually depend on.
+    const explorerRestored = (async ()=>{
+      if(restoreExplorerFromCache()) return;
+      // Only falls back to an actual search (costs one API call, same as the
+      // very first time you ever search) if there's nothing cached yet, e.g.
+      // the first login on a new device/browser.
       try{
         const res = await storageApi.get(userKey("lastSearch"), false);
         if(res && res.value){
@@ -2383,13 +2411,15 @@
           currentQuery = "";
         }
       }catch(e){}
-    }
+    })();
 
     // Preview tab's saved query/cells are also per-user (see userKey above) -
     // loaded here (after we know who's logged in) rather than eagerly at
     // script boot, so a different account never inherits the previous one's
     // preview board.
-    if(window.__loadPreviewState) window.__loadPreviewState();
+    const previewRestored = window.__loadPreviewState ? window.__loadPreviewState() : Promise.resolve();
+
+    await Promise.all([boardsAndItemsLoaded, explorerRestored, previewRestored]);
   }
 
   // On page load: if a token is already stored, verify it still works before
