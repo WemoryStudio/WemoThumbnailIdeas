@@ -2060,6 +2060,12 @@
   function getAuthToken(){ return localStorage.getItem("wemory_token"); }
   function setAuthToken(token){ localStorage.setItem("wemory_token", token); }
   function clearAuthToken(){ localStorage.removeItem("wemory_token"); }
+  // Cached alongside the token so the very next page load can start
+  // rendering (and read the right per-user cache keys) immediately, without
+  // waiting on a network round trip to /auth/me first just to learn who's
+  // logged in - see initAuth's optimistic-then-verify flow below.
+  function getCachedUserId(){ return localStorage.getItem("wemory_user_id"); }
+  function setCachedUserId(id){ localStorage.setItem("wemory_user_id", String(id)); }
 
   // Thin wrapper around fetch() that attaches the login token and the
   // backend's base URL, and normalizes error handling for every API call.
@@ -2321,6 +2327,7 @@
       const endpoint = authMode === "login" ? "/auth/login" : "/auth/register";
       const data = await apiFetch(endpoint, { method: "POST", body: JSON.stringify({ email, password }) });
       setAuthToken(data.token);
+      setCachedUserId(data.user.id);
       currentUserId = data.user.id;
       authPasswordInput.value = "";
       hideAuthOverlay();
@@ -2392,6 +2399,17 @@
     renderBoard();
     if(hadBoardsCache) loadingOverlay.classList.remove("show");
 
+    // Show whichever tab was active before this refresh (defaults to
+    // Explorer, already active in the markup, if none was saved) - done
+    // this early, before any network call below, so a refresh while on
+    // e.g. Preview never flashes Explorer first while waiting on the
+    // boards/items fetch. The tab's actual content (board list, Explorer
+    // cache, preview cells) fills in moments later as each restore below
+    // resolves - switching visibility doesn't depend on that data existing
+    // yet, only rendering it correctly does, which already happens on its
+    // own once each finishes.
+    if(window.__restoreActiveTab) window.__restoreActiveTab();
+
     const boardsAndItemsLoaded = Promise.all([
       apiFetch("/boards").then(
         (data)=>{ boards = data.boards.map(b => ({ id: b.id, name: b.name, createdAt: new Date(b.created_at).getTime() })); },
@@ -2444,25 +2462,52 @@
     const previewRestored = window.__loadPreviewState ? window.__loadPreviewState() : Promise.resolve();
 
     await Promise.all([boardsAndItemsLoaded, explorerRestored, previewRestored]);
-
-    // Show whichever tab was active before this refresh (defaults to
-    // Explorer, already active in the markup, if none was saved).
-    if(window.__restoreActiveTab) window.__restoreActiveTab();
   }
 
-  // On page load: if a token is already stored, verify it still works before
-  // skipping straight past the login screen.
+  // On page load: if a token is already stored, start rendering
+  // immediately using the last-known user id (cached alongside the token)
+  // instead of waiting on a network round trip to /auth/me first just to
+  // confirm it - that round trip (worse on a cold backend instance) was
+  // delaying even the purely-local, already-instant cache restores inside
+  // loadAll(), and blocking the active-tab restore, which is what caused a
+  // refresh to visibly flash Explorer before jumping to whatever tab (e.g.
+  // Preview) was actually last open. /auth/me still runs, just in the
+  // background to confirm the optimistic render was justified.
   (async function initAuth(){
     const token = getAuthToken();
     if(!token){ showAuthOverlay(); return; }
+
+    const cachedUserId = getCachedUserId();
+    if(cachedUserId){
+      currentUserId = cachedUserId;
+      hideAuthOverlay();
+      loadAll();
+    }
+
     try{
       const me = await apiFetch("/auth/me");
-      currentUserId = me.user.id;
-      hideAuthOverlay();
-      await loadAll();
+      setCachedUserId(me.user.id);
+      if(!cachedUserId){
+        // no cached id (first time on this browser/device) - couldn't render
+        // optimistically above, so do it the normal way now that it's confirmed.
+        currentUserId = me.user.id;
+        hideAuthOverlay();
+        await loadAll();
+      } else if(String(me.user.id) !== String(cachedUserId)){
+        // rare: the confirmed id doesn't match what was cached - re-render
+        // with the real one instead of leaving the wrong user's data up.
+        currentUserId = me.user.id;
+        await loadAll();
+      }
     }catch(e){
-      clearAuthToken();
-      showAuthOverlay();
+      if(e.status === 401){
+        // apiFetch already cleared the token and re-showed the overlay;
+        // reload to also discard whatever the optimistic render above
+        // already put on screen, back to a clean logged-out state.
+        location.reload();
+      }
+      // any other error (e.g. network hiccup) - leave the optimistic render
+      // as-is rather than forcing a logout over a transient failure.
     }
   })();
 
