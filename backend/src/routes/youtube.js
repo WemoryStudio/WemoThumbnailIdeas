@@ -1,9 +1,11 @@
 const express = require("express");
 const { requireAuth } = require("../middleware/auth");
 const { fetchYoutube } = require("../lib/youtubeKeys");
+const { youtubeLimiter } = require("../middleware/rateLimits");
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(youtubeLimiter);
 
 const ORDER_MAP = {
   relevance: "relevance",

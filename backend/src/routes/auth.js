@@ -3,6 +3,8 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { pool } = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { asyncHandler } = require("../lib/asyncHandler");
+const { authLimiter } = require("../middleware/rateLimits");
 
 const router = express.Router();
 
@@ -10,9 +12,9 @@ function signToken(userId) {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: "30d" });
 }
 
-router.post("/register", async (req, res) => {
+router.post("/register", authLimiter, asyncHandler(async (req, res) => {
   const { email, password } = req.body || {};
-  if (!email || !password || password.length < 6) {
+  if (typeof email !== "string" || typeof password !== "string" || !email.trim() || password.length < 6) {
     return res.status(400).json({ error: "Email and a password of at least 6 characters are required." });
   }
 
@@ -29,11 +31,13 @@ router.post("/register", async (req, res) => {
 
   const user = rows[0];
   res.status(201).json({ token: signToken(user.id), user: { id: user.id, email: user.email } });
-});
+}));
 
-router.post("/login", async (req, res) => {
+router.post("/login", authLimiter, asyncHandler(async (req, res) => {
   const { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
+  if (typeof email !== "string" || typeof password !== "string" || !email.trim() || !password) {
+    return res.status(400).json({ error: "Email and password are required." });
+  }
 
   const { rows } = await pool.query(`SELECT * FROM users WHERE email = $1`, [email.toLowerCase()]);
   const user = rows[0];
@@ -43,12 +47,12 @@ router.post("/login", async (req, res) => {
   if (!ok) return res.status(401).json({ error: "Invalid email or password." });
 
   res.json({ token: signToken(user.id), user: { id: user.id, email: user.email } });
-});
+}));
 
-router.get("/me", requireAuth, async (req, res) => {
+router.get("/me", requireAuth, asyncHandler(async (req, res) => {
   const { rows } = await pool.query(`SELECT id, email, created_at FROM users WHERE id = $1`, [req.userId]);
   if (!rows[0]) return res.status(404).json({ error: "User not found." });
   res.json({ user: rows[0] });
-});
+}));
 
 module.exports = router;
