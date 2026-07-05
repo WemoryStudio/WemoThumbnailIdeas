@@ -11,15 +11,15 @@ const authLimiter = rateLimit({
 
 // YouTube search/trending: the API key pool is shared by every user of the
 // app now (it used to be each user's own key), so one user hammering search
-// can burn the whole day's quota for everyone else. Keyed by user id (set by
-// requireAuth, which runs before this in youtube.js) rather than IP, so it
-// throttles per-account instead of per-network.
+// can burn the whole day's quota for everyone else. Keyed by user id — this
+// limiter is only ever mounted after requireAuth (see youtube.js), so
+// req.userId is always set by the time it runs.
 const youtubeLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
   limit: 30,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => (req.userId ? String(req.userId) : req.ip),
+  keyGenerator: (req) => String(req.userId),
   message: { error: "Too many searches — please wait a few minutes before searching again." },
 });
 

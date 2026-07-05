@@ -2080,6 +2080,12 @@
   let boards = [];
   let items = [];
   let activeBoardId = "__all__";
+  // Set once we know who's logged in (see initAuth/submitAuthForm). Used to
+  // namespace localStorage keys that are otherwise shared by the whole
+  // browser, so a second account signing in on the same machine doesn't see
+  // the previous account's search history / preview board.
+  let currentUserId = null;
+  function userKey(key){ return currentUserId ? key + "_u" + currentUserId : key; }
   let nextPageToken = "";
   let currentQuery = "";
   let displayedVideoIds = new Set(); // dedupe across "load more" pages within one search session
@@ -2229,7 +2235,7 @@
   }
 
   async function savePinned(){
-    try{ await storageApi.set("pinnedBoards", JSON.stringify(pinnedBoardIds), false); }
+    try{ await storageApi.set(userKey("pinnedBoards"), JSON.stringify(pinnedBoardIds), false); }
     catch(e){ showToast("Storage error (pinned)", true); }
   }
   async function saveLang(){ try{ await storageApi.set("lang", lang, false); } catch(e){} }
@@ -2284,6 +2290,7 @@
       const endpoint = authMode === "login" ? "/auth/login" : "/auth/register";
       const data = await apiFetch(endpoint, { method: "POST", body: JSON.stringify({ email, password }) });
       setAuthToken(data.token);
+      currentUserId = data.user.id;
       authPasswordInput.value = "";
       hideAuthOverlay();
       await loadAll();
@@ -2313,8 +2320,9 @@
     }catch(e){}
 
     try{
-      const res = await storageApi.get("pinnedBoards", false);
+      const res = await storageApi.get(userKey("pinnedBoards"), false);
       if(res && res.value) pinnedBoardIds = JSON.parse(res.value);
+      else pinnedBoardIds = [];
     }catch(e){ pinnedBoardIds = []; }
 
     try{
@@ -2346,7 +2354,7 @@
     renderBoard();
 
     try{
-      const res = await storageApi.get("lastSearch", false);
+      const res = await storageApi.get(userKey("lastSearch"), false);
       if(res && res.value){
         const saved = JSON.parse(res.value);
         if(saved.order) orderSelect.value = saved.order;
@@ -2358,8 +2366,17 @@
           nextPageToken = "";
           runSearch(saved.query, false);
         }
+      } else {
+        searchInput.value = "";
+        currentQuery = "";
       }
     }catch(e){}
+
+    // Preview tab's saved query/cells are also per-user (see userKey above) -
+    // loaded here (after we know who's logged in) rather than eagerly at
+    // script boot, so a different account never inherits the previous one's
+    // preview board.
+    if(window.__loadPreviewState) window.__loadPreviewState();
   }
 
   // On page load: if a token is already stored, verify it still works before
@@ -2368,7 +2385,8 @@
     const token = getAuthToken();
     if(!token){ showAuthOverlay(); return; }
     try{
-      await apiFetch("/auth/me");
+      const me = await apiFetch("/auth/me");
+      currentUserId = me.user.id;
       hideAuthOverlay();
       await loadAll();
     }catch(e){
@@ -3732,7 +3750,7 @@
 
   async function saveSearchState(){
     try{
-      await storageApi.set("lastSearch", JSON.stringify({
+      await storageApi.set(userKey("lastSearch"), JSON.stringify({
         query: currentQuery,
         order: orderSelect.value,
         time: timeSelect.value,
@@ -3913,7 +3931,7 @@
     // placement, removal, title edits via confirmTitle).
     async function savePreviewState(){
       try{
-        await storageApi.set("previewState", JSON.stringify({
+        await storageApi.set(userKey("previewState"), JSON.stringify({
           query: pQuery,
           order: orderSelectP.value,
           time: timeSelectP.value,
@@ -3923,9 +3941,15 @@
     }
 
     async function loadPreviewState(){
+      // Reset to a clean slate first - important when switching between
+      // accounts on the same browser, since without this a second user would
+      // still see whatever was left over from cells/pQuery in memory.
+      cells = [];
+      pQuery = "";
+      previewSearchInput.value = "";
       try{
-        const res = await storageApi.get("previewState", false);
-        if(!res || !res.value) return;
+        const res = await storageApi.get(userKey("previewState"), false);
+        if(!res || !res.value){ previewEmptyState.style.display = cells.length ? "none" : "block"; return; }
         const saved = JSON.parse(res.value);
         if(saved.order) orderSelectP.value = saved.order;
         if(saved.time) timeSelectP.value = saved.time;
@@ -3935,11 +3959,12 @@
         }
         if(Array.isArray(saved.cells) && saved.cells.length){
           cells = saved.cells;
-          previewEmptyState.style.display = "none";
-          renderPreviewGrid();
         }
+        previewEmptyState.style.display = cells.length ? "none" : "block";
+        renderPreviewGrid();
       }catch(e){}
     }
+    window.__loadPreviewState = loadPreviewState;
 
     // Click-to-arm, click-again-to-confirm — same pattern as deleting a
     // board — so clearing the whole grid can't happen from a stray click.
@@ -4865,7 +4890,6 @@
     window.__rerenderPreview = ()=>{ if(cells.length || placing) renderPreviewGrid(); };
 
     updateSearchNudge(); // kick off the initial "search me" wiggle
-    loadPreviewState(); // restore last search + placed designs, if any
   })();
 
 
