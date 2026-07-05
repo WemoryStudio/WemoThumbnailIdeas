@@ -935,10 +935,10 @@
      streak's motion didn't track the cursor 1:1. `left` alone now carries
      position (driven by --mx, updated live via JS mousemove /
      attachShimmerTracking); the skew is purely cosmetic tilt on top.
-     Two layers for a less flat, more "polished glass" look: a soft wide
-     glow tinted faintly toward the brand accent, plus a slim brighter core
-     hairline — both color-dodge blended into the blurred thumbnail/tint
-     underneath rather than sitting on top as flat white. */
+     Two thin layers for a subtle "polished glass" feel rather than a bold
+     streak: a faint wide glow tinted toward the brand accent, plus an even
+     fainter slim core. soft-light (not color-dodge) keeps both gentle - it
+     nudges the underlying blur/tint brighter instead of blowing it out. */
   .info-bar-blur-zone .shimmer{
     position:absolute; inset:0;
     overflow:hidden;
@@ -957,10 +957,10 @@
     left:var(--mx);
     height:220%;
     transform:translateX(-50%) skewX(-20deg);
-    mix-blend-mode:color-dodge;
+    mix-blend-mode:soft-light;
   }
   .info-bar-blur-zone .shimmer::before{
-    width:46%;
+    width:34%;
     background:linear-gradient(
       90deg,
       transparent 0%,
@@ -969,11 +969,11 @@
     );
   }
   .info-bar-blur-zone .shimmer::after{
-    width:10%;
+    width:7%;
     background:linear-gradient(
       90deg,
       transparent 0%,
-      rgba(255,255,255,0.55) 50%,
+      rgba(255,255,255,0.4) 50%,
       transparent 100%
     );
   }
