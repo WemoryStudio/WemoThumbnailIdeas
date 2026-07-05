@@ -841,22 +841,11 @@
     #previewGrid.orbit-mode .preview-card{width:100px;}
   }
 
-  /* Registering --mx as an animatable <length> lets the browser natively
-     interpolate it (and therefore the shimmer's transform, which reads it)
-     between mousemove updates instead of snapping instantly to each new
-     value - that instant snapping between discrete positions, dozens of
-     times a second, is what was actually reading as flicker. */
-  @property --mx{
-    syntax:'<length>';
-    inherits:true;
-    initial-value:0px;
-  }
-
   .card{
     position:relative; background:var(--bg); border-radius:var(--card-radius);
     overflow:hidden; border:1px solid transparent;
     transition:transform .18s ease, border-color .18s ease, box-shadow .18s ease;
-    --mx:0px; --my:50%;
+    --mx:50%; --my:50%;
   }
 
   /* one-time entrance for competitor cards the moment placing mode opens
@@ -942,61 +931,39 @@
       rgba(10,10,11,0.65) 100%
     );
   }
-  /* Glass-sheen glare, same skewed-bar technique as #uploadDesignBtn's shine
-     (a separate element positioned via `left`, tilted via transform:skewX)
-     instead of encoding position through gradient-angle color stops — that
-     coupled the tilt angle to the apparent left/right position, so the
-     streak's motion didn't track the cursor 1:1. `left` alone now carries
-     position (driven by --mx, updated live via JS mousemove /
-     attachShimmerTracking); the skew is purely cosmetic tilt on top.
-     Two thin layers for a subtle "polished glass" feel rather than a bold
-     streak: a faint wide glow tinted toward the brand accent, plus an even
-     fainter slim core. soft-light (not color-dodge) keeps both gentle - it
-     nudges the underlying blur/tint brighter instead of blowing it out. */
+  /* Glass-sheen glare, rebuilt to be as cheap to render as the original
+     plain radial glow it replaced: ONE element, moved by sliding
+     `background-position` (natively animatable, paint-only) instead of
+     `transform`+`filter:blur`+`mix-blend-mode` stacked across two separate
+     pseudo-elements. That combination is expensive on every browser/GPU -
+     each of those three properties alone can force its own extra rendering
+     pass, and doing all three together while updating on mousemove was
+     what actually caused the reported flicker, not anything JS-side.
+     The diagonal tilt comes from the gradient's own angle (not a
+     transform:skewX), and softness comes from wide, gradual color stops
+     (not filter:blur) - both free. mix-blend-mode is kept since blending
+     into the blur/tint underneath is the specific look that was asked for,
+     but it's now only ever computed for a single flat layer. */
   .info-bar-blur-zone .shimmer{
     position:absolute; inset:0;
-    overflow:hidden;
+    background-image:linear-gradient(
+      75deg,
+      transparent 0%,
+      rgba(219,159,245,0.22) 40%,
+      rgba(255,255,255,0.4) 50%,
+      rgba(219,159,245,0.22) 60%,
+      transparent 100%
+    );
+    background-size:320% 100%;
+    background-repeat:no-repeat;
+    background-position:var(--mx) 0;
+    mix-blend-mode:soft-light;
     opacity:0;
     pointer-events:none;
-    transition:opacity .2s ease;
+    transition:opacity .2s ease, background-position .08s linear;
   }
   .card:hover .info-bar-blur-zone .shimmer{
     opacity:1;
-  }
-  .info-bar-blur-zone .shimmer::before,
-  .info-bar-blur-zone .shimmer::after{
-    content:"";
-    position:absolute;
-    top:-30%;
-    left:0;
-    height:160%;
-    /* translateX (not `left`) for position - `left` triggers a layout
-       recalc on every single mousemove update, which combined with the
-       filter+blend-mode below was visibly flickering/stuttering instead of
-       gliding smoothly. transform is compositor-only, no layout cost. */
-    transform:translateX(calc(var(--mx) - 50%)) skewX(-20deg);
-    transition:transform .08s linear;
-    mix-blend-mode:soft-light;
-    filter:blur(10px);
-    will-change:transform;
-  }
-  .info-bar-blur-zone .shimmer::before{
-    width:56%;
-    background:linear-gradient(
-      90deg,
-      transparent 0%,
-      rgba(219,159,245,0.26) 50%,
-      transparent 100%
-    );
-  }
-  .info-bar-blur-zone .shimmer::after{
-    width:16%;
-    background:linear-gradient(
-      90deg,
-      transparent 0%,
-      rgba(255,255,255,0.3) 50%,
-      transparent 100%
-    );
   }
   /* thin shadow right where the thumbnail meets the info-bar. Starts at
      blur-zone's own top (synced with blur/outline, covering the corner
@@ -3561,10 +3528,7 @@
       const rawY = ((e.clientY - rect.top) / rect.height) * 100;
       const xPct = Math.max(12, Math.min(88, rawX));
       const yPct = Math.max(12, Math.min(88, rawY));
-      // In px (not %): the shimmer positions itself via transform:translateX
-      // now instead of `left`, and translateX's own percentages resolve
-      // against the element's own box, not the container - px sidesteps that.
-      card.style.setProperty("--mx", `${(xPct / 100) * rect.width}px`);
+      card.style.setProperty("--mx", `${xPct}%`);
       card.style.setProperty("--my", `${yPct}%`);
     }
 
