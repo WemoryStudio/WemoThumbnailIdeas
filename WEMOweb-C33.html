@@ -66,6 +66,20 @@
     -webkit-font-smoothing:antialiased;
   }
 
+  /* Form controls don't inherit font-family by default (browsers give them
+     the OS UI font), so any button/input/select that slipped by without an
+     explicit font-family rule stuck out in a different typeface from the
+     rest of the page. Class-level rules still win over this element-level
+     reset wherever a specific font is intended. */
+  button, input, select, textarea{ font-family:inherit; }
+
+  /* Tab-content and wave-group slide-ins start translated up to 45vw off to
+     the side - transformed boxes still contribute to the scrollable overflow
+     area, so without this every slide flashed a horizontal scrollbar for its
+     duration. `clip` (not `hidden`) so no scroll container is created, which
+     would break the topbar's position:sticky. */
+  html{ overflow-x:clip; }
+
   .topbar{
     position:sticky;
     top:0;
@@ -187,10 +201,25 @@
   #searchResultsWrap, #boardWrap, #previewWrap{
     transition:transform .45s cubic-bezier(.22,1,.36,1), opacity .35s ease;
   }
+  /* Outgoing panels fade noticeably faster than they travel - the scroll
+     position also gets restored for the incoming tab a few frames into the
+     switch, and a mostly-faded outgoing panel hides that reposition instead
+     of visibly teleporting mid-slide. */
+  .tab-slide-out-left, .tab-slide-out-right{
+    transition:transform .45s cubic-bezier(.22,1,.36,1), opacity .22s ease;
+  }
   .tab-slide-out-left{ transform:translateX(-16vw); opacity:0; }
   .tab-slide-out-right{ transform:translateX(16vw); opacity:0; }
   .tab-slide-in-left{ transform:translateX(-16vw); opacity:0; }
   .tab-slide-in-right{ transform:translateX(16vw); opacity:0; }
+
+  /* the JS wave/orbit loops already check this preference themselves - this
+     covers the CSS-driven slides/fades they don't control */
+  @media (prefers-reduced-motion: reduce){
+    #searchResultsWrap, #boardWrap, #previewWrap,
+    #waveGroupNormal, #waveGroupOrbit{ transition:none; }
+    .panel.active{ animation:none; }
+  }
 
   /* Orbit-specific wave/float accents: position:absolute with left/top set
      directly in px by positionOrbitWave(), using the exact same
@@ -716,7 +745,14 @@
   .tab-btn:hover:not(.active){color:var(--text);}
 
   .panel{display:none; margin-top:13px;}
-  .panel.active{display:block;}
+  .panel.active{display:block; animation:panelFadeIn .3s ease;}
+  /* the topbar's own row (search filters / board tabs / preview toolbar)
+     swapped instantly on tab change while the page content below it slid -
+     a soft fade+drop keeps the header row in step with that motion */
+  @keyframes panelFadeIn{
+    from{ opacity:0; transform:translateY(-4px); }
+    to{ opacity:1; transform:translateY(0); }
+  }
   #panel-search.active{
     display:flex; align-items:center; justify-content:center;
     gap:10px 12px; flex-wrap:wrap;
@@ -1567,7 +1603,7 @@
     <p id="authDesc">Log in to search thumbnails and keep your boards saved permanently.</p>
     <input type="text" id="authEmailInput" placeholder="Email" autocomplete="username">
     <input type="password" id="authPasswordInput" placeholder="Password (min 6 characters)" autocomplete="current-password">
-    <p id="authError" style="display:none; color:#c8203f; font-size:12px; margin:-8px 0 12px;"></p>
+    <p id="authError" style="display:none; color:#ff6b81; font-size:12px; margin:-8px 0 12px;"></p>
     <div class="modal-row" style="justify-content:space-between; align-items:center;">
       <span class="help-link" id="authToggleModeBtn">Need an account? Sign up</span>
       <button class="btn" id="authSubmitBtn">Log in</button>
@@ -2429,7 +2465,10 @@
       hideAuthOverlay();
       await loadAll();
     }catch(e){
-      authErrorEl.textContent = e.message || "Something went wrong.";
+      // e.message is the literal key "connFail" when the server was
+      // unreachable (see apiFetch) - show the translated message instead of
+      // leaking the raw key into the form.
+      authErrorEl.textContent = e.status === 0 ? t("connFail") : (e.message || "Something went wrong.");
       authErrorEl.style.display = "block";
     }
     authSubmitBtn.disabled = false;
@@ -2724,11 +2763,17 @@
       // actually read as "not smooth". Taking the outgoing one out of flow
       // for the duration of its exit fixes that: only the incoming panel
       // (already normal-flow) drives layout height during the transition.
+      // Pinned at its MEASURED offset (not top:0/left:0/right:0, which
+      // ignores <main>'s own padding and made the panel visibly jump ~22px
+      // up and outward the instant its exit started).
       fromWrap.classList.remove(...TAB_SLIDE_CLASSES);
+      const pinTop = fromWrap.offsetTop;
+      const pinLeft = fromWrap.offsetLeft;
+      const pinWidth = fromWrap.offsetWidth;
       fromWrap.style.position = "absolute";
-      fromWrap.style.top = "0";
-      fromWrap.style.left = "0";
-      fromWrap.style.right = "0";
+      fromWrap.style.top = pinTop + "px";
+      fromWrap.style.left = pinLeft + "px";
+      fromWrap.style.width = pinWidth + "px";
       void fromWrap.offsetWidth;
       fromWrap.classList.add(outClass);
       setTimeout(()=>{
@@ -2739,7 +2784,7 @@
           fromWrap.style.position = "";
           fromWrap.style.top = "";
           fromWrap.style.left = "";
-          fromWrap.style.right = "";
+          fromWrap.style.width = "";
           fromWrap.classList.remove(outClass);
         }
       }, 400);
@@ -3116,18 +3161,69 @@
     return tab;
   }
 
-  async function renameBoard(boardId){
+  // In-app rename dialog instead of the native prompt() popup - prompt()
+  // renders as a bare OS dialog in the system font, completely outside the
+  // app's styling, and (in Chrome) with a "localhost says:"-style title bar.
+  // Same construction pattern as showConfirmModal below.
+  function renameBoard(boardId){
     if(boardId === "__all__"){ showToast(t("cantRenameAll"), true); return; }
     const b = getBoardById(boardId);
     if(!b) return;
-    const newName = prompt(t("renamePrompt"), b.name);
-    if(newName && newName.trim()){
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop show";
+    backdrop.style.zIndex = "9999999";
+
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.style.maxWidth = "380px";
+
+    const h = document.createElement("h2");
+    h.textContent = t("renamePrompt");
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = b.name;
+    input.style.marginTop = "12px";
+
+    const row = document.createElement("div");
+    row.className = "modal-row";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "btn-ghost";
+    cancelBtn.textContent = t("cancel");
+    cancelBtn.onclick = (e)=>{ e.stopPropagation(); backdrop.remove(); };
+
+    const okBtn = document.createElement("button");
+    okBtn.className = "btn";
+    okBtn.textContent = t("save");
+    async function confirmRename(){
+      const newName = input.value.trim();
+      backdrop.remove();
+      if(!newName || newName === b.name) return;
       try{
-        await apiFetch(`/boards/${b.id}`, { method: "PUT", body: JSON.stringify({ name: newName.trim() }) });
-        b.name = newName.trim();
+        await apiFetch(`/boards/${b.id}`, { method: "PUT", body: JSON.stringify({ name: newName }) });
+        b.name = newName;
         renderBoardTabs();
       }catch(e){ showToast(e.message, true); }
     }
+    okBtn.onclick = (e)=>{ e.stopPropagation(); confirmRename(); };
+    input.addEventListener("keydown", (e)=>{
+      if(e.key === "Enter"){ e.preventDefault(); confirmRename(); }
+      if(e.key === "Escape"){ e.preventDefault(); backdrop.remove(); }
+    });
+
+    row.appendChild(cancelBtn);
+    row.appendChild(okBtn);
+    modal.appendChild(h);
+    modal.appendChild(input);
+    modal.appendChild(row);
+    modal.onclick = (e)=> e.stopPropagation();
+    backdrop.appendChild(modal);
+    backdrop.addEventListener("click", (e)=>{ if(e.target === backdrop) backdrop.remove(); });
+    document.body.appendChild(backdrop);
+    input.focus();
+    input.select();
   }
 
   function openBoardPicker(video){
@@ -5571,6 +5667,10 @@
   // the main wave); this IIFE only ever touches opacity. =====
   (function setupWaveGlowPulse(){
     const glow = document.getElementById("waveGlowPulse");
+    // The orbit group's glow was left permanently at opacity:0 (only the
+    // normal group's was ever driven) - pulse both from the same value so
+    // whichever group is currently visible gets the identical effect.
+    const glowOrbit = document.getElementById("waveGlowPulseOrbit");
     if(!glow) return;
     if(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
@@ -5584,7 +5684,9 @@
 
     function tick(){
       opacity = Math.max(0, opacity - FADE_OUT);
-      glow.style.opacity = opacity.toFixed(3);
+      const o = opacity.toFixed(3);
+      glow.style.opacity = o;
+      if(glowOrbit) glowOrbit.style.opacity = o;
       requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
