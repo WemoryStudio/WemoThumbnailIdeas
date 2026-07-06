@@ -178,6 +178,19 @@
   .wave-group-in-left{ transform:translateX(-45vw); opacity:0; pointer-events:none; }
   .wave-group-in-right{ transform:translateX(45vw); opacity:0; pointer-events:none; }
 
+  /* Tab content slide (Explorer/Preview/My Boards) — a modest slide-and-fade
+     instead of the old instant display:none/block swap, so switching tabs
+     feels like the incoming content glides in from the tab bar's direction
+     rather than popping in. Distance is intentionally much smaller than the
+     decorative wave groups' 45vw — this is readable content, not background. */
+  #searchResultsWrap, #boardWrap, #previewWrap{
+    transition:transform .4s cubic-bezier(.22,1,.36,1), opacity .32s ease;
+  }
+  .tab-slide-out-left{ transform:translateX(-32px); opacity:0; }
+  .tab-slide-out-right{ transform:translateX(32px); opacity:0; }
+  .tab-slide-in-left{ transform:translateX(-32px); opacity:0; }
+  .tab-slide-in-right{ transform:translateX(32px); opacity:0; }
+
   /* Orbit-specific wave/float accents: position:absolute with left/top set
      directly in px by positionOrbitWave(), using the exact same
      orbitCx/orbitCy/orbitRadius numbers the 16 cards themselves are placed
@@ -2689,6 +2702,57 @@
   // refreshing, instead of always landing back on Explorer.
   const WAVE_TAB_ORDER = ["search", "preview", "board"];
 
+  const TAB_WRAPS = { search: searchResultsWrap, board: boardWrap, preview: previewWrap };
+  const TAB_SLIDE_CLASSES = ["tab-slide-in-left", "tab-slide-in-right", "tab-slide-out-left", "tab-slide-out-right"];
+
+  // Slides the outgoing tab's content out to one side while the incoming
+  // tab's content slides in from the other, instead of the old instant
+  // display:none/block swap - dir follows the same convention as the wave
+  // groups (1 = moving to a later tab, enters from the right; -1 = earlier
+  // tab, enters from the left).
+  function slideTabContent(fromTab, toTab, dir){
+    const fromWrap = TAB_WRAPS[fromTab];
+    const toWrap = TAB_WRAPS[toTab];
+
+    if(fromWrap && fromWrap !== toWrap){
+      const outClass = dir > 0 ? "tab-slide-out-left" : "tab-slide-out-right";
+      fromWrap.classList.remove(...TAB_SLIDE_CLASSES);
+      void fromWrap.offsetWidth;
+      fromWrap.classList.add(outClass);
+      setTimeout(()=>{
+        // only hide if still mid-exit - guards against a rapid back-and-forth
+        // switch re-showing this wrap before the timeout fires
+        if(fromWrap.classList.contains(outClass)){
+          fromWrap.style.display = "none";
+          fromWrap.classList.remove(outClass);
+        }
+      }, 400);
+    }
+
+    if(toWrap){
+      const inClass = dir > 0 ? "tab-slide-in-right" : "tab-slide-in-left";
+      toWrap.style.display = "block";
+      toWrap.classList.remove("tab-slide-out-left", "tab-slide-out-right");
+      toWrap.style.transition = "none";
+      toWrap.classList.add(inClass);
+      void toWrap.offsetWidth;
+      toWrap.style.transition = "";
+      // double-rAF is the normal path (lets the "start off to the side"
+      // state actually paint once before easing to center) - but if rAF
+      // never fires for any reason, a fallback timeout still clears the
+      // class, since the alternative (stuck permanently invisible/off-
+      // screen) is far worse than a slightly-less-smooth entrance.
+      let settled = false;
+      const settle = ()=>{
+        if(settled) return;
+        settled = true;
+        toWrap.classList.remove(inClass);
+      };
+      requestAnimationFrame(()=>{ requestAnimationFrame(settle); });
+      setTimeout(settle, 120);
+    }
+  }
+
   function activateTab(tab, opts){
     opts = opts || {};
     const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
@@ -2701,6 +2765,11 @@
     }
     if(previousTabKey === "preview" && previousTabKey !== tab && window.__previewOrbitScrollSync) window.__previewOrbitScrollSync.onLeaveTab();
 
+    const isRealSwitch = !opts.isInitialLoad && previousTabKey && previousTabKey !== tab;
+    const dir = isRealSwitch
+      ? (WAVE_TAB_ORDER.indexOf(tab) > WAVE_TAB_ORDER.indexOf(previousTabKey) ? 1 : -1)
+      : 1;
+
     // Wave-group handoff: only meaningfully different when the switch
     // actually crosses into or out of Preview while the ring is spinning -
     // Explorer<->My Boards (neither one Preview) always shows the same
@@ -2709,10 +2778,7 @@
       const orbitOn = window.__isOrbitModeOn ? window.__isOrbitModeOn() : false;
       const showOrbit = tab === "preview" && orbitOn;
       const crossesPreviewBoundary = previousTabKey && ((previousTabKey === "preview") !== (tab === "preview"));
-      if(!opts.isInitialLoad && crossesPreviewBoundary && orbitOn){
-        const fromIdx = WAVE_TAB_ORDER.indexOf(previousTabKey);
-        const toIdx = WAVE_TAB_ORDER.indexOf(tab);
-        const dir = toIdx > fromIdx ? 1 : -1;
+      if(isRealSwitch && crossesPreviewBoundary && orbitOn){
         window.__setWaveGroupState(showOrbit, { slideDir: dir });
       } else if(crossesPreviewBoundary || opts.isInitialLoad){
         window.__setWaveGroupState(showOrbit);
@@ -2723,10 +2789,19 @@
     document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
     btn.classList.add("active");
     document.getElementById("panel-" + tab).classList.add("active");
-    searchResultsWrap.style.display = (tab === "search") ? "block" : "none";
-    boardWrap.style.display = (tab === "board") ? "block" : "none";
-    previewWrap.style.display = (tab === "preview") ? "block" : "none";
-    if(tab === "board") renderBoard();
+
+    if(tab === "board") renderBoard(); // populate before it slides/snaps into view
+
+    if(isRealSwitch){
+      slideTabContent(previousTabKey, tab, dir);
+    } else {
+      // initial load: snap directly to the right tab, no animation
+      Object.keys(TAB_WRAPS).forEach(key=>{
+        TAB_WRAPS[key].style.display = (key === tab) ? "block" : "none";
+        TAB_WRAPS[key].classList.remove(...TAB_SLIDE_CLASSES);
+      });
+    }
+
     if(tab === "preview" && window.__previewOrbitScrollSync) window.__previewOrbitScrollSync.onEnterTab();
 
     try{ sessionStorage.setItem(userKey("activeTab"), tab); }catch(e){}
@@ -4411,11 +4486,17 @@
         entering.classList.add(inClass);
         void entering.offsetWidth;
         entering.style.transition = "";
-        requestAnimationFrame(()=>{
-          requestAnimationFrame(()=>{
-            entering.classList.remove(inClass);
-          });
-        });
+        // fallback timeout alongside the normal double-rAF settle - if rAF
+        // never fires for any reason, this group must not stay stuck
+        // invisible/off-screen forever.
+        let settled = false;
+        const settle = ()=>{
+          if(settled) return;
+          settled = true;
+          entering.classList.remove(inClass);
+        };
+        requestAnimationFrame(()=>{ requestAnimationFrame(settle); });
+        setTimeout(settle, 120);
       } else {
         groupOrbit.classList.remove(...slideClasses);
         groupNormal.classList.remove(...slideClasses);
@@ -4736,14 +4817,15 @@
       orbitBoost = Math.min(ORBIT_BOOST_MAX, orbitBoost + ORBIT_BOOST_STEP);
     }, {passive:true});
 
-    // Rule: while the 16-card ring is orbiting, the main round wave must
-    // stay exactly centered inside it. refreshMainWaveTarget() is already
-    // called at every known trigger (orbit start, geometry changes, window
-    // resize), but that only covers cases already anticipated - this is a
-    // continuous, low-cost backstop so the centering holds as a standing
-    // guarantee rather than something that can only be trusted right after
-    // one of those specific triggers. Throttled (not every frame) since it
-    // forces a layout read via getBoundingClientRect.
+    // Rule: while the 16-card ring is orbiting, the orbit wave group must
+    // stay exactly centered inside it. cacheOrbitGeometry() (which calls
+    // positionOrbitWave()) already runs at every known trigger (orbit start,
+    // geometry changes, window resize), but that only covers cases already
+    // anticipated - this is a continuous, low-cost backstop so the
+    // centering holds as a standing guarantee rather than something that
+    // can only be trusted right after one of those specific triggers.
+    // Throttled (not every frame) since it forces a layout read via
+    // offsetLeft/offsetTop.
     let lastWaveResyncT = 0;
     const WAVE_RESYNC_INTERVAL = 400; // ms
 
@@ -4756,7 +4838,7 @@
       if(orbitModeOn){
         if(t - lastWaveResyncT > WAVE_RESYNC_INTERVAL){
           lastWaveResyncT = t;
-          refreshMainWaveTarget();
+          positionOrbitWave();
         }
 
         const boostRatio = Math.min(1, orbitBoost / ORBIT_BOOST_MAX);
@@ -5428,62 +5510,16 @@
     requestAnimationFrame(tick);
   })();
 
-  // ===== main wave "descend to center" — eased down by setupPreview the
-  // moment the user starts typing a search topic (toward the middle of the
-  // 16-card ring), and eased back home once they start placing a design.
-  // This only adds a translateY on top of the wave-mask's own fixed base
-  // position; the inner rotation/liquid-wobble above lives on a different
-  // element and is untouched. =====
-  (function setupMainWaveDescend(){
-    const layer = document.getElementById("waveMaskLayer");
-    const glow = document.getElementById("waveGlowPulse");
-    if(!layer){ window.__setMainWaveDescendTarget = function(){}; return; }
-    if(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches){
-      window.__setMainWaveDescendTarget = function(){}; // respects the preference: stay put
-      return;
-    }
-
-    // The wave-mask's own CSS size is min(1008px, 128.8vw) — replicate that
-    // math here instead of measuring the live (possibly already-scaled)
-    // element, so the "home" diameter used for the scale ratio stays correct
-    // no matter what scale is currently applied.
-    function homeDiameter(){
-      return Math.min(1008, window.innerWidth * 1.288);
-    }
-
-    let targetX = 0, currentX = 0;
-    let targetY = 0, currentY = 0;
-    let targetScale = 1, currentScale = 1;
-
-    // pxX defaults to 0 (viewport-horizontally-centered) for old callers
-    // that only ever passed (px, ringRadius) - but the ring/preview area
-    // isn't always exactly centered on the full viewport, so relying on the
-    // wave-mask's own `left:50%` alone left it visibly off to one side
-    // whenever it wasn't. refreshMainWaveTarget below now always supplies
-    // the real horizontal offset too.
-    window.__setMainWaveDescendTarget = function(px, ringRadius, pxX){
-      targetY = px || 0;
-      targetX = pxX || 0;
-      if(ringRadius){
-        // sits clearly inside the ring rather than reaching its edge
-        const desiredDiameter = ringRadius * 1.90;
-        targetScale = Math.min(1, desiredDiameter / homeDiameter());
-      } else {
-        targetScale = 1;
-      }
-    };
-
-    function tick(){
-      currentX += (targetX - currentX) * 0.02;         // slow, graceful glide both ways
-      currentY += (targetY - currentY) * 0.02;
-      currentScale += (targetScale - currentScale) * 0.02;
-      const t = "translate(-50%,-50%) translateX(" + currentX + "px) translateY(" + currentY + "px) scale(" + currentScale.toFixed(4) + ")";
-      layer.style.transform = t;
-      if(glow) glow.style.transform = t; // glow always shares the main wave's exact center + scale
-      requestAnimationFrame(tick);
-    }
-    requestAnimationFrame(tick);
-  })();
+  // ===== main wave "descend to center" — REMOVED per explicit rule: the
+  // normal wave group (Explorer/My Boards/non-orbit Preview) must never
+  // reposition the main wave away from its static home spot, full stop.
+  // This used to ease waveMaskLayer toward the ring center whenever
+  // mainWaveDescended was set - that's exactly the kind of movement the
+  // dedicated #waveGroupOrbit group now owns instead (see
+  // positionOrbitWave/setWaveGroupState). window.__setMainWaveDescendTarget
+  // is kept as a permanent no-op since requestMainWaveDescend/Home and
+  // refreshMainWaveTarget elsewhere still call it - all harmless now. =====
+  window.__setMainWaveDescendTarget = function(){};
 
   // ===== center glow pulse: invisible at rest, fades in while the mouse is
   // actively moving and eases back out the moment it stops. Position/scale
