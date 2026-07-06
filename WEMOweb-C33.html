@@ -193,25 +193,21 @@
   .wave-group-in-right{ transform:translateX(45vw); opacity:0; pointer-events:none; }
 
   /* Tab content slide (Explorer/Preview/My Boards) instead of the old
-     instant display:none/block swap - a real slide-in from the side, not
-     just a fade with a barely-there nudge (32px read as basically a fade;
-     this needs to actually look like it's entering from outside the
-     viewport). Opacity is still eased alongside it so the off-screen start
-     doesn't flash in fully-opaque content at the very edge. */
+     instant display:none/block swap. Deliberately transform-only, no
+     opacity fade at all - a fade dominated the perception even with a large
+     translate distance, because content became fully visible well before
+     the transform finished settling, so the eye read "faded in" rather than
+     "traveled in from the side". Pure position is what actually reads as a
+     slide: content stays fully opaque the whole time, entering/exiting
+     across the viewport edge (html{overflow-x:clip} above hides it while
+     off-screen). */
   #searchResultsWrap, #boardWrap, #previewWrap{
-    transition:transform .45s cubic-bezier(.22,1,.36,1), opacity .35s ease;
+    transition:transform .45s cubic-bezier(.22,1,.36,1);
   }
-  /* Outgoing panels fade noticeably faster than they travel - the scroll
-     position also gets restored for the incoming tab a few frames into the
-     switch, and a mostly-faded outgoing panel hides that reposition instead
-     of visibly teleporting mid-slide. */
-  .tab-slide-out-left, .tab-slide-out-right{
-    transition:transform .45s cubic-bezier(.22,1,.36,1), opacity .22s ease;
-  }
-  .tab-slide-out-left{ transform:translateX(-16vw); opacity:0; }
-  .tab-slide-out-right{ transform:translateX(16vw); opacity:0; }
-  .tab-slide-in-left{ transform:translateX(-16vw); opacity:0; }
-  .tab-slide-in-right{ transform:translateX(16vw); opacity:0; }
+  .tab-slide-out-left{ transform:translateX(-16vw); }
+  .tab-slide-out-right{ transform:translateX(16vw); }
+  .tab-slide-in-left{ transform:translateX(-16vw); }
+  .tab-slide-in-right{ transform:translateX(16vw); }
 
   /* the JS wave/orbit loops already check this preference themselves - this
      covers the CSS-driven slides/fades they don't control */
@@ -5687,6 +5683,29 @@
       const o = opacity.toFixed(3);
       glow.style.opacity = o;
       if(glowOrbit) glowOrbit.style.opacity = o;
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  })();
+
+  // ===== orbit group's own 2 b&w accents: a lightweight continuous spin
+  // (same speeds as the normal group's floats below, for visual
+  // consistency) - they only ever need to sit near the ring, which
+  // positionOrbitWave already handles, so they don't need that system's
+  // full drift/repel/anchor machinery, just something to keep them from
+  // looking frozen next to a spinning ring. =====
+  (function setupOrbitFloatSpin(){
+    const f1 = document.getElementById("waveFloatOrbit1");
+    const f2 = document.getElementById("waveFloatOrbit2");
+    if(!f1 && !f2) return;
+    if(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    let angle1 = 0, angle2 = 40;
+    function tick(){
+      angle1 = (angle1 + 0.22) % 360;
+      angle2 = (angle2 - 0.17 + 360) % 360;
+      if(f1) f1.style.transform = "rotate(" + angle1 + "deg)";
+      if(f2) f2.style.transform = "rotate(" + angle2 + "deg)";
       requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
