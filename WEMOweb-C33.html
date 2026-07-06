@@ -151,6 +151,71 @@
     aspect-ratio:1/1;
   }
 
+  /* ===== wave group swap (Explorer/My Boards "normal" vs Preview-orbit
+     "orbit") — see setWaveGroupState in JS. Both groups share the same
+     transition timing so a tab-switch slide always looks like one
+     continuous handoff rather than two independently-timed animations. */
+  #waveGroupNormal, #waveGroupOrbit{
+    transition:transform .45s cubic-bezier(.22,1,.36,1), opacity .3s ease;
+  }
+  #waveGroupNormal{
+    position:fixed; inset:0;
+    pointer-events:none;
+    z-index:0;
+  }
+  /* Deliberately NOT position:absolute/fixed - previewGrid's normal
+     (non-orbit) masonry layout still needs to contribute real height to
+     #previewWrap's document flow. transform-based sliding works fine on an
+     in-flow element; only the orbit wave/float children inside (which DO
+     need to be positioned precisely against the ring) are position:absolute,
+     anchored by this wrapper's position:relative. */
+  #waveGroupOrbit{
+    position:relative;
+  }
+  .wave-group-hidden{ opacity:0; pointer-events:none; }
+  .wave-group-out-left{ transform:translateX(-45vw); opacity:0; pointer-events:none; }
+  .wave-group-out-right{ transform:translateX(45vw); opacity:0; pointer-events:none; }
+  .wave-group-in-left{ transform:translateX(-45vw); opacity:0; pointer-events:none; }
+  .wave-group-in-right{ transform:translateX(45vw); opacity:0; pointer-events:none; }
+
+  /* Orbit-specific wave/float accents: position:absolute with left/top set
+     directly in px by positionOrbitWave(), using the exact same
+     orbitCx/orbitCy/orbitRadius numbers the 16 cards themselves are placed
+     with — guarantees pixel-perfect centering in the ring, instead of the
+     old approach of converting a viewport-fixed wave's position through
+     getBoundingClientRect(), which drifted out of sync easily. */
+  .wave-mask-orbit{
+    position:absolute; top:0; left:0;
+    aspect-ratio:1/1;
+    transform:translate(-50%,-50%);
+    pointer-events:none;
+    z-index:-1;
+    overflow:hidden;
+    -webkit-mask-image:linear-gradient(to bottom, #000 45%, rgba(0,0,0,0.55) 62%, transparent 75%);
+    mask-image:linear-gradient(to bottom, #000 45%, rgba(0,0,0,0.55) 62%, transparent 75%);
+    transition:opacity .3s ease;
+  }
+  .wave-glow-orbit{
+    position:absolute; top:0; left:0;
+    aspect-ratio:1/1;
+    transform:translate(-50%,-50%);
+    pointer-events:none;
+    z-index:3;
+    opacity:0;
+    mix-blend-mode:screen;
+  }
+  .wave-float-orbit{
+    position:absolute; top:0; left:0;
+    pointer-events:none;
+    z-index:-1;
+    opacity:0.4;
+    filter:grayscale(1) brightness(1.15) contrast(1.05);
+    aspect-ratio:1/1;
+    transition:opacity .3s ease;
+  }
+  .wave-float-orbit-1{ width:min(160px, 18vw); }
+  .wave-float-orbit-2{ width:min(120px, 14vw); }
+
   .topbar-inner{max-width:1400px; margin:0 auto; position:relative; z-index:2;}
   .brand-row{
     display:grid;
@@ -1496,14 +1561,18 @@
   </div>
 </div>
 
-<div class="wave-mask" id="waveMaskLayer" aria-hidden="true">
-  <img class="wave-decor" id="waveDecor" src="" alt="">
+<!-- "Normal" wave group: home position (top wave + bottom-corner b&w accents),
+     shown for Explorer/My Boards and for Preview whenever the 16-card ring
+     isn't actively spinning. Slides out/in as a single unit when swapping
+     with waveGroupOrbit below - see setWaveGroupState. -->
+<div id="waveGroupNormal">
+  <div class="wave-mask" id="waveMaskLayer" aria-hidden="true">
+    <img class="wave-decor" id="waveDecor" src="" alt="">
+  </div>
+  <img class="wave-glow" id="waveGlowPulse" src="" alt="" aria-hidden="true">
+  <img class="wave-float wave-float-1" id="waveFloat1" src="" alt="" aria-hidden="true">
+  <img class="wave-float wave-float-2" id="waveFloat2" src="" alt="" aria-hidden="true">
 </div>
-
-<img class="wave-glow" id="waveGlowPulse" src="" alt="" aria-hidden="true">
-
-<img class="wave-float wave-float-1" id="waveFloat1" src="" alt="" aria-hidden="true">
-<img class="wave-float wave-float-2" id="waveFloat2" src="" alt="" aria-hidden="true">
 
 <div class="topbar" id="topbar">
   <div class="topbar-inner">
@@ -1624,7 +1693,20 @@
       <div class="big" id="previewEmptyTitle">Preview your thumbnail against real competitors</div>
       <p id="previewEmptyP1"><span class="hl-pink">Search a topic</span> to load real YouTube thumbnails, then use <b>Upload design</b> to drop your own draft into any slot and compare titles side by side.</p>
     </div>
-    <div class="masonry" id="previewGrid"></div>
+    <!-- "Orbit" wave group: main wave + 2 b&w accents positioned to match the
+         spinning 16-card ring exactly (same orbitCx/orbitCy/orbitRadius the
+         cards themselves use - see positionOrbitWave). Only ever shown while
+         orbitModeOn; hidden the rest of the time, including the plain
+         (non-orbit) Preview grid before a topic is searched. -->
+    <div id="waveGroupOrbit" class="wave-group-hidden">
+      <div class="wave-mask-orbit" id="waveMaskLayerOrbit" aria-hidden="true">
+        <img class="wave-decor" id="waveDecorOrbit" src="" alt="">
+      </div>
+      <img class="wave-glow-orbit" id="waveGlowPulseOrbit" src="" alt="" aria-hidden="true">
+      <img class="wave-float-orbit wave-float-orbit-1" id="waveFloatOrbit1" src="" alt="" aria-hidden="true">
+      <img class="wave-float-orbit wave-float-orbit-2" id="waveFloatOrbit2" src="" alt="" aria-hidden="true">
+      <div class="masonry" id="previewGrid"></div>
+    </div>
     <div class="load-more-row" id="previewLoadMoreRow" style="display:none;">
       <button class="btn-ghost" id="previewLoadMoreBtn">Load more</button>
     </div>
@@ -2605,6 +2687,8 @@
   // Pulled out of the click handler so the same tab-switch logic can also
   // run on page load to restore whichever tab the user had open before
   // refreshing, instead of always landing back on Explorer.
+  const WAVE_TAB_ORDER = ["search", "preview", "board"];
+
   function activateTab(tab, opts){
     opts = opts || {};
     const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
@@ -2616,6 +2700,24 @@
       savedScrollPositions[previousTabKey] = window.scrollY;
     }
     if(previousTabKey === "preview" && previousTabKey !== tab && window.__previewOrbitScrollSync) window.__previewOrbitScrollSync.onLeaveTab();
+
+    // Wave-group handoff: only meaningfully different when the switch
+    // actually crosses into or out of Preview while the ring is spinning -
+    // Explorer<->My Boards (neither one Preview) always shows the same
+    // "normal" group on both sides, so there's nothing to animate there.
+    if(window.__setWaveGroupState){
+      const orbitOn = window.__isOrbitModeOn ? window.__isOrbitModeOn() : false;
+      const showOrbit = tab === "preview" && orbitOn;
+      const crossesPreviewBoundary = previousTabKey && ((previousTabKey === "preview") !== (tab === "preview"));
+      if(!opts.isInitialLoad && crossesPreviewBoundary && orbitOn){
+        const fromIdx = WAVE_TAB_ORDER.indexOf(previousTabKey);
+        const toIdx = WAVE_TAB_ORDER.indexOf(tab);
+        const dir = toIdx > fromIdx ? 1 : -1;
+        window.__setWaveGroupState(showOrbit, { slideDir: dir });
+      } else if(crossesPreviewBoundary || opts.isInitialLoad){
+        window.__setWaveGroupState(showOrbit);
+      }
+    }
 
     document.querySelectorAll(".tab-btn").forEach(b=>b.classList.remove("active"));
     document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
@@ -4042,6 +4144,10 @@
   document.getElementById("waveFloat1").src = WAVE_DATA_URL;
   document.getElementById("waveFloat2").src = WAVE_DATA_URL;
   document.getElementById("waveGlowPulse").src = GLOW_DATA_URL;
+  document.getElementById("waveDecorOrbit").src = WAVE_DATA_URL;
+  document.getElementById("waveFloatOrbit1").src = WAVE_DATA_URL;
+  document.getElementById("waveFloatOrbit2").src = WAVE_DATA_URL;
+  document.getElementById("waveGlowPulseOrbit").src = GLOW_DATA_URL;
 
   // ==================== PREVIEW TAB ====================
   // A YouTube-like grid where the user drops their OWN thumbnail drafts among
@@ -4273,6 +4379,51 @@
     let orbitRemeasureTimer = null;
     let orbitHintShown = false;
 
+    // Swaps between the "normal" wave group (home position - used by
+    // Explorer/My Boards, and Preview whenever the ring isn't spinning) and
+    // the "orbit" wave group (centered in the 16-card ring). Two modes:
+    //  - opts.slideDir set (±1): an actual tab switch happened while the
+    //    ring was spinning - the two groups slide past each other like
+    //    handing off, direction matching which way the tab bar moved.
+    //  - no slideDir: orbit mode itself just started/stopped while already
+    //    on the Preview tab - a plain in-place cross-fade, no slide, since
+    //    there's no "from tab" to derive a direction from.
+    function setWaveGroupState(showOrbit, opts){
+      opts = opts || {};
+      const groupNormal = document.getElementById("waveGroupNormal");
+      const groupOrbit = document.getElementById("waveGroupOrbit");
+      if(!groupNormal || !groupOrbit) return;
+      const slideClasses = ["wave-group-out-left", "wave-group-out-right", "wave-group-in-left", "wave-group-in-right"];
+
+      if(opts.slideDir){
+        const dir = opts.slideDir;
+        const leaving = showOrbit ? groupNormal : groupOrbit;
+        const entering = showOrbit ? groupOrbit : groupNormal;
+        const outClass = dir > 0 ? "wave-group-out-left" : "wave-group-out-right";
+        const inClass  = dir > 0 ? "wave-group-in-right"  : "wave-group-in-left";
+
+        leaving.classList.remove("wave-group-hidden", ...slideClasses);
+        void leaving.offsetWidth; // restart the transition cleanly even if one was already mid-flight
+        leaving.classList.add(outClass);
+
+        entering.style.transition = "none";
+        entering.classList.remove("wave-group-hidden", ...slideClasses);
+        entering.classList.add(inClass);
+        void entering.offsetWidth;
+        entering.style.transition = "";
+        requestAnimationFrame(()=>{
+          requestAnimationFrame(()=>{
+            entering.classList.remove(inClass);
+          });
+        });
+      } else {
+        groupOrbit.classList.remove(...slideClasses);
+        groupNormal.classList.remove(...slideClasses);
+        groupOrbit.classList.toggle("wave-group-hidden", !showOrbit);
+        groupNormal.classList.toggle("wave-group-hidden", showOrbit);
+      }
+    }
+
     // Scrolling the page while the orbit ring is up would move the 16 cards
     // (they sit in normal document flow) while the main wave stays fixed to
     // the viewport center — the two immediately fall out of sync. Locking
@@ -4294,6 +4445,11 @@
       onLeaveTab: unlockPageScroll,
       onEnterTab: ()=>{ if(orbitModeOn) lockPageScroll(); }
     };
+    // Exposed so activateTab (outside this closure, in the main tab-switch
+    // code) can read orbit state and drive the wave-group slide choreography
+    // when switching in or out of the Preview tab.
+    window.__isOrbitModeOn = function(){ return orbitModeOn; };
+    window.__setWaveGroupState = setWaveGroupState;
 
     function updateOrbitMode(){
       if(orbitExiting) return; // let the staggered exit finish undisturbed
@@ -4304,6 +4460,7 @@
         lockPageScroll();
         cacheOrbitGeometry();
         orbitModeOn = true;
+        setWaveGroupState(true);
         clearInterval(orbitRemeasureTimer);
         setTimeout(measureOrbitTarget, 560); // just past the grid's own resize transition
         orbitRemeasureTimer = setInterval(measureOrbitTarget, 2500);
@@ -4440,6 +4597,7 @@
     function beginOrbitExit(onDone){
       orbitExiting = true;
       orbitModeOn = false; // stops orbitSpinTick from repositioning cards further
+      setWaveGroupState(false); // fade the orbit wave out in step with the cards shrinking into it
       const cardEls = Array.from(previewGrid.querySelectorAll(".preview-card"));
       const n = cardEls.length;
       cardEls.forEach((el, i)=>{
@@ -4522,6 +4680,42 @@
       if(sampleCard){
         orbitCardHalfW = (sampleCard.offsetWidth || 132) / 2;
         orbitCardHalfH = (sampleCard.offsetHeight || 96) / 2;
+      }
+      positionOrbitWave();
+    }
+
+    // Places the orbit wave group's main wave/glow dead center in the ring,
+    // and the two b&w accents just outside it - using previewGrid's own
+    // offset plus orbitCx/orbitCy/orbitRadius, the exact same numbers the 16
+    // cards themselves are positioned with (both are absolute-positioned
+    // against the same #waveGroupOrbit ancestor). This is what actually
+    // guarantees the wave lines up with the ring, instead of the old
+    // viewport-rect conversion that could drift out of sync.
+    function positionOrbitWave(){
+      const maskEl = document.getElementById("waveMaskLayerOrbit");
+      const glowEl = document.getElementById("waveGlowPulseOrbit");
+      const float1 = document.getElementById("waveFloatOrbit1");
+      const float2 = document.getElementById("waveFloatOrbit2");
+      if(!maskEl) return;
+
+      const left = previewGrid.offsetLeft + orbitCx;
+      const top = previewGrid.offsetTop + orbitCy;
+      const diameter = orbitRadius * 1.9;
+
+      [maskEl, glowEl].forEach(el=>{
+        if(!el) return;
+        el.style.left = left + "px";
+        el.style.top = top + "px";
+        el.style.width = diameter + "px";
+      });
+
+      if(float1){
+        float1.style.left = (left - orbitRadius * 1.25) + "px";
+        float1.style.top = (top - orbitRadius * 0.35) + "px";
+      }
+      if(float2){
+        float2.style.left = (left + orbitRadius * 1.2) + "px";
+        float2.style.top = (top + orbitRadius * 0.5) + "px";
       }
     }
     window.addEventListener("resize", ()=>{
