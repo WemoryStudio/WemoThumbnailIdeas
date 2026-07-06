@@ -178,18 +178,19 @@
   .wave-group-in-left{ transform:translateX(-45vw); opacity:0; pointer-events:none; }
   .wave-group-in-right{ transform:translateX(45vw); opacity:0; pointer-events:none; }
 
-  /* Tab content slide (Explorer/Preview/My Boards) — a modest slide-and-fade
-     instead of the old instant display:none/block swap, so switching tabs
-     feels like the incoming content glides in from the tab bar's direction
-     rather than popping in. Distance is intentionally much smaller than the
-     decorative wave groups' 45vw — this is readable content, not background. */
+  /* Tab content slide (Explorer/Preview/My Boards) instead of the old
+     instant display:none/block swap - a real slide-in from the side, not
+     just a fade with a barely-there nudge (32px read as basically a fade;
+     this needs to actually look like it's entering from outside the
+     viewport). Opacity is still eased alongside it so the off-screen start
+     doesn't flash in fully-opaque content at the very edge. */
   #searchResultsWrap, #boardWrap, #previewWrap{
-    transition:transform .4s cubic-bezier(.22,1,.36,1), opacity .32s ease;
+    transition:transform .45s cubic-bezier(.22,1,.36,1), opacity .35s ease;
   }
-  .tab-slide-out-left{ transform:translateX(-32px); opacity:0; }
-  .tab-slide-out-right{ transform:translateX(32px); opacity:0; }
-  .tab-slide-in-left{ transform:translateX(-32px); opacity:0; }
-  .tab-slide-in-right{ transform:translateX(32px); opacity:0; }
+  .tab-slide-out-left{ transform:translateX(-16vw); opacity:0; }
+  .tab-slide-out-right{ transform:translateX(16vw); opacity:0; }
+  .tab-slide-in-left{ transform:translateX(-16vw); opacity:0; }
+  .tab-slide-in-right{ transform:translateX(16vw); opacity:0; }
 
   /* Orbit-specific wave/float accents: position:absolute with left/top set
      directly in px by positionOrbitWave(), using the exact same
@@ -5493,6 +5494,13 @@
   // (waveMask) never moves, so the dark edge stays fixed over the cards. =====
   (function setupWaveSpin(){
     const wave = document.getElementById("waveDecor");
+    // The orbit group's wave image is a separate element (waveGroupOrbit
+    // needs its own, positioned independently of the normal group's) - it
+    // was sitting there with no rotation/wobble at all, reading as "frozen"
+    // next to the spinning normal-group wave. Driven by the exact same
+    // tick loop/values below so both look identical, just positioned
+    // differently by positionOrbitWave.
+    const waveOrbit = document.getElementById("waveDecorOrbit");
     if(!wave) return;
     if(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
@@ -5527,12 +5535,19 @@
       const kx = Math.sin(t * 0.7 + 0.6) * skewAmp;
       const ky = Math.cos(t * 0.9) * skewAmp;
 
-      wave.style.transform =
+      const transformStr =
         "rotate(" + angle + "deg) scale(" + sx + "," + sy + ") skew(" + kx + "deg," + ky + "deg)";
-      wave.style.filter =
+      const filterStr =
         "saturate(" + (BASE_SATURATE + BOOST_SATURATE * boostRatio) + ") " +
         "contrast(" + (BASE_CONTRAST + BOOST_CONTRAST * boostRatio) + ") " +
         "brightness(" + (BASE_BRIGHTNESS + BOOST_BRIGHTNESS * boostRatio) + ")";
+
+      wave.style.transform = transformStr;
+      wave.style.filter = filterStr;
+      if(waveOrbit){
+        waveOrbit.style.transform = transformStr;
+        waveOrbit.style.filter = filterStr;
+      }
 
       requestAnimationFrame(tick);
     }
