@@ -808,7 +808,7 @@
   .checkbox-pill input{accent-color:var(--accent); cursor:pointer;}
   .visually-hidden{display:none !important;}
 
-  main{max-width:1400px; margin:0 auto; padding:22px 28px 80px;}
+  main{max-width:1400px; margin:0 auto; padding:22px 28px 80px; position:relative;}
 
   .empty-state{text-align:center; padding:90px 20px; color:var(--text-dim);}
   .empty-state .hl-pink{color:var(--hot); font-weight:600;}
@@ -2716,7 +2716,18 @@
 
     if(fromWrap && fromWrap !== toWrap){
       const outClass = dir > 0 ? "tab-slide-out-left" : "tab-slide-out-right";
+      // Both wraps are plain block siblings in <main>'s normal document
+      // flow - simultaneously display:block during the crossfade meant they
+      // stacked on top of each other vertically (pushing page height up
+      // and back down again) instead of overlapping in place, which is what
+      // actually read as "not smooth". Taking the outgoing one out of flow
+      // for the duration of its exit fixes that: only the incoming panel
+      // (already normal-flow) drives layout height during the transition.
       fromWrap.classList.remove(...TAB_SLIDE_CLASSES);
+      fromWrap.style.position = "absolute";
+      fromWrap.style.top = "0";
+      fromWrap.style.left = "0";
+      fromWrap.style.right = "0";
       void fromWrap.offsetWidth;
       fromWrap.classList.add(outClass);
       setTimeout(()=>{
@@ -2724,6 +2735,10 @@
         // switch re-showing this wrap before the timeout fires
         if(fromWrap.classList.contains(outClass)){
           fromWrap.style.display = "none";
+          fromWrap.style.position = "";
+          fromWrap.style.top = "";
+          fromWrap.style.left = "";
+          fromWrap.style.right = "";
           fromWrap.classList.remove(outClass);
         }
       }, 400);
@@ -4524,7 +4539,17 @@
     // too) and reapplied on the way back in if orbit mode is still active.
     window.__previewOrbitScrollSync = {
       onLeaveTab: unlockPageScroll,
-      onEnterTab: ()=>{ if(orbitModeOn) lockPageScroll(); }
+      onEnterTab: ()=>{
+        if(!orbitModeOn) return;
+        lockPageScroll();
+        // previewGrid was display:none while a different tab was active, so
+        // any geometry read during that time (the periodic resync in
+        // orbitSpinTick keeps running regardless of visible tab) would have
+        // measured a collapsed 0×0 box and parked the orbit wave somewhere
+        // wrong. Re-measure immediately now that it's visible again, instead
+        // of waiting up to 400ms for the next periodic tick to correct it.
+        cacheOrbitGeometry();
+      }
     };
     // Exposed so activateTab (outside this closure, in the main tab-switch
     // code) can read orbit state and drive the wave-group slide choreography
@@ -4836,7 +4861,11 @@
       orbitAngle += (ORBIT_BASE_SPEED + orbitBoost) * dt;
 
       if(orbitModeOn){
-        if(t - lastWaveResyncT > WAVE_RESYNC_INTERVAL){
+        // previewGrid is display:none (0×0) while a different tab is active -
+        // measuring geometry then would park the wave somewhere wrong for
+        // whenever the user switches back (onEnterTab above re-measures
+        // immediately at that point instead, which is the right time for it).
+        if(t - lastWaveResyncT > WAVE_RESYNC_INTERVAL && previewGrid.clientWidth > 0){
           lastWaveResyncT = t;
           positionOrbitWave();
         }
