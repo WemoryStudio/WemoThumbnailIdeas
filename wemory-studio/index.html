@@ -782,8 +782,14 @@ const EDGE_FRAG = /* glsl */`
     vec3 glowC  = texture2D(uGlow, vUv).rgb;
     vec2 c = (vUv - 0.5) * 2.0;
     float d = max(abs(c.x), abs(c.y));   // square-ish falloff so corners glow too
-    float edge = smoothstep(0.38, 1.0, d);
-    gl_FragColor = vec4(sharpC + glowC * edge * 0.6, 1.0);
+    // was smoothstep(0.38,...) * 0.6 — started well over a third of the way in
+    // from center, so it visibly hazed over real artwork near the top/bottom/
+    // side of the screen, not just the literal corners (reported as "blur" on
+    // uploaded work, distinct from the actual texture-resolution fix above).
+    // Pulled the onset in much closer to the true edge and cut the strength,
+    // keeping it a subtle corner accent instead of a wash over card content.
+    float edge = smoothstep(0.72, 1.0, d);
+    gl_FragColor = vec4(sharpC + glowC * edge * 0.35, 1.0);
   }
 `;
 let blurMatH = null, blurMatV = null, edgeMat = null;
