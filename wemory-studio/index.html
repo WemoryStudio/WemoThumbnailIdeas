@@ -72,16 +72,28 @@
   .head-mid{
     display:flex; gap:60px; align-items:flex-start; padding-top:4px;
   }
+  /* "negative" auto-contrast instead of a fixed color or a capsule backdrop —
+     mix-blend-mode:difference inverts against whatever's rendered behind it
+     (bright card → reads dark, dark card → reads light), so it stays legible
+     over the gallery regardless of what's scrolled underneath. Needs a pure
+     white source color: difference against white text is what actually
+     produces the invert (a mid-grey source would just look washed out). */
   .tagline{
     font-family:var(--mono); font-size:10.5px; line-height:1.55; letter-spacing:.06em;
-    text-transform:uppercase; color:#cfd2d3; max-width:330px;
+    text-transform:uppercase; color:#fff; max-width:330px;
+    mix-blend-mode:difference;
   }
   .clocks{
     font-family:var(--mono); font-size:10.5px; line-height:1.55; letter-spacing:.06em;
-    text-transform:uppercase; color:#cfd2d3; white-space:nowrap;
+    text-transform:uppercase; color:#fff; white-space:nowrap;
+    mix-blend-mode:difference;
   }
-  .clocks .dot{ color:#7ee787; margin-right:6px; }
-  .clocks .tz{ color:var(--mute); margin-left:10px; }
+  .clocks .dot{
+    color:#f0f0ee; margin-right:6px;
+    animation:dotPulse 2.2s ease-in-out infinite;
+  }
+  @keyframes dotPulse{ 0%,100%{ color:#f0f0ee; } 50%{ color:#4a4e52; } }
+  .clocks .tz{ color:#fff; margin-left:10px; }   /* stays white so the difference-blend invert reads cleanly, not the old muted grey */
   #letsTalk{
     background:var(--ink); color:#0a0a0b; font-weight:600; font-size:15px;
     padding:14px 26px; border-radius:999px; text-decoration:none;
@@ -367,6 +379,7 @@
   @media (prefers-reduced-motion: reduce){
     #hint{ animation:none; }
     #letsTalk, #uploadBtn{ transition:none; }
+    .clocks .dot{ animation:none; }
   }
 </style>
 </head>
@@ -384,7 +397,7 @@
     <div class="tagline">WEMORY IS A ONE&#8209;MAN VISUAL STUDIO CRAFTING SCROLL&#8209;STOPPING THUMBNAILS, MOTION GRAPHICS &amp; DESIGN FOR CREATORS.</div>
     <div class="clocks">
       <div><span class="dot">&#9679;</span>INDONESIA <span class="tz" id="clockPml">--:--</span></div>
-      <div><span class="dot">&#9679;</span>YOUR TIME&nbsp;&nbsp;&nbsp; <span class="tz" id="clockLocal">--:--</span></div>
+      <div><span class="dot">&#9679;</span>YOUR TIME <span class="tz" id="clockLocal">--:--</span></div>
     </div>
   </div>
   <a id="letsTalk" href="mailto:adelna.abadi20@gmail.com?subject=Let%27s%20Talk%20%E2%80%94%20WEMORY%20Studio">Let's Talk</a>
@@ -1523,13 +1536,8 @@ const endDrag = () => {
 stage.addEventListener('pointerup', endDrag);
 stage.addEventListener('pointercancel', endDrag);
 
-stage.addEventListener('wheel', e => {
-  if (panelOpen) return;
-  e.preventDefault();
-  camX += e.deltaX * 0.9 / zoom;
-  camY += e.deltaY * 0.9 / zoom;
-  document.getElementById('hint').classList.add('gone');
-}, { passive: false });
+// mouse-wheel/trackpad scroll panning removed by request — drag/touch is the
+// only way to move around the gallery now
 
 addEventListener('keydown', e => {
   if (panelOpen) return;
@@ -1768,6 +1776,18 @@ async function assignDuplicatesForNewSlots(oldSlotCount, newSlotCount){
   }
 }
 
+// (re)assign a single empty slot a fresh borrowed-image source, centered on
+// `near` — used both to top up a slot that never got one (e.g. its original
+// batch didn't have enough real uploads yet to draw from) and to replace a
+// stale one whose source has since lost its own upload
+async function assignDuplicateForSlot(slot, near){
+  const [source] = pickDuplicateSources(1, near);
+  if (source == null) return false;
+  duplicateOf[slot] = source;
+  try { await dbDupPut({ slot, source }); } catch (e){ console.error(e); }
+  return true;
+}
+
 async function addFiles(fileList, targetSlot = null){
   const files = [...fileList].filter(f => f.type.startsWith('image/'));
   if (!files.length){ showToast('Tidak ada file gambar yang valid'); return 0; }
@@ -1813,12 +1833,14 @@ async function removeSlot(slot){
   }
   refreshSlotEverywhere(slot);
   // any slot borrowing THIS one's image (see duplicateOf) would otherwise be
-  // left pointing at a texture dropSlotTextures() just disposed — blank those
-  // back to the plain placeholder too instead of leaving a broken card
+  // left pointing at a texture dropSlotTextures() just disposed — try to hand
+  // them a fresh source right away instead of dropping to a bare placeholder
+  const half = Math.floor(SLOTS / 2);
   for (let i = 0; i < duplicateOf.length; i++){
     if (duplicateOf[i] !== slot) continue;
     duplicateOf[i] = null;
     try { await dbDupDel(i); } catch (e){ console.error(e); }
+    await assignDuplicateForSlot(i, half);
     refreshSlotEverywhere(i);
   }
 }
@@ -2125,12 +2147,38 @@ supabase.auth.onAuthStateChange((_event, session) => setAdminUI(!!session));
     for (const rec of (rows || [])){
       if (rec.slot < 0 || rec.slot >= SLOTS) continue;
       if (rec.pinned && urls[rec.slot]) pinnedSlots.push(rec.slot);
-      // ignore stale duplicate_of: the slot must still be genuinely empty and
-      // the source must still have a real upload, or just fall back to the
-      // plain placeholder rather than trust a possibly-outdated reference
+      // keep duplicate_of only if the slot is still genuinely empty AND its
+      // source still has a real upload — otherwise leave it unset here and
+      // let the top-up pass below find it a fresh source, rather than
+      // silently falling back to a bare placeholder forever
       if (rec.duplicate_of != null && !urls[rec.slot] &&
           rec.duplicate_of >= 0 && rec.duplicate_of < SLOTS && urls[rec.duplicate_of]){
         duplicateOf[rec.slot] = rec.duplicate_of;
+      }
+    }
+    // top-up pass: any empty slot still missing a valid duplicate-of (never
+    // got one — e.g. not enough real uploads existed nearby yet when it was
+    // created — or its old source has since lost its own upload) gets a
+    // fresh best-effort assignment instead of sitting as a bare placeholder.
+    // Admin-only: this persists to the DB (dbDupPut), which RLS rejects for
+    // anonymous visitors — gating on isAdmin avoids every regular visitor's
+    // page load throwing a wall of permission-denied errors trying to save
+    // something they can't; it self-heals next time the owner is logged in.
+    if (isAdmin){
+      const halfNow = Math.floor(SLOTS / 2);
+      const needsFix = [];
+      for (let slot = 0; slot < SLOTS; slot++){
+        if (!urls[slot] && duplicateOf[slot] == null) needsFix.push(slot);
+      }
+      // batched, like assignDuplicatesForNewSlots — picking sources for the
+      // whole group at once (not one call per slot) is what guarantees
+      // distinct sources across them; one-at-a-time calls don't know what
+      // the others already picked and tend to all land on the same nearest one
+      const sources = shuffle(pickDuplicateSources(needsFix.length, halfNow));
+      for (let i = 0; i < needsFix.length && i < sources.length; i++){
+        const slot = needsFix[i], source = sources[i];
+        duplicateOf[slot] = source;
+        try { await dbDupPut({ slot, source }); } catch (e){ console.error(e); }
       }
     }
     // open centered on one of the pinned cards instead of the fixed default —
