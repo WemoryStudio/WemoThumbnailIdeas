@@ -1,0 +1,2159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WEMORY&reg; Studio — Work</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23f0f0ee'/%3E%3Ctext x='16' y='23' font-family='Arial Black,sans-serif' font-size='19' font-weight='900' text-anchor='middle' fill='%23050506'%3EW%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#050506;
+    --ink:#f0f0ee;
+    --mute:#878b8e;
+    --line:#232628;
+    --chip:#2e3134;
+    --card-bg:#121214;
+    --grot:'Space Grotesk',system-ui,sans-serif;
+    --mono:'Space Mono',ui-monospace,monospace;
+  }
+  *{ margin:0; padding:0; box-sizing:border-box; }
+  html,body{ height:100%; overflow:hidden; background:var(--bg); color:var(--ink);
+    font-family:var(--grot); -webkit-font-smoothing:antialiased; }
+  button{ font:inherit; color:inherit; background:none; border:none; cursor:pointer; }
+
+  /* ============ STAGE (WebGL canvas — cards, meta text, grid lines & glow all
+     live inside the GL scene so they share one curved surface) ============ */
+  #stage{
+    position:fixed; inset:0; overflow:hidden;
+    cursor:grab; touch-action:none;
+    user-select:none; -webkit-user-select:none;
+    opacity:0; transition:opacity .9s ease .15s, filter .5s ease;
+  }
+  #stage.ready{ opacity:1; }
+  #stage.dragging{ cursor:grabbing; }
+  #stage.dimmed{ filter:brightness(.28) blur(7px); pointer-events:none; }
+  #stage canvas{ display:block; }
+
+  #vignette{
+    position:fixed; inset:0; pointer-events:none; z-index:5;
+    /* closest-side (not farthest-corner) sizes the ellipse's own axes to each
+       side's own half-extent, so top/bottom and left/right reach full darkness
+       at the SAME relative distance from center — on a wide viewport,
+       farthest-corner made the short (vertical) axis darken much sooner than
+       the long (horizontal) one, which read as a "gap" only on top/bottom */
+    background:radial-gradient(ellipse closest-side at 50% 50%, transparent 52%, rgba(0,0,0,.8) 100%);
+  }
+
+  /* ============ HEADER ============ */
+  header{
+    position:fixed; top:0; left:0; right:0; z-index:20;
+    display:flex; align-items:flex-start; justify-content:space-between;
+    padding:22px 28px; pointer-events:none;
+  }
+  header > *{ pointer-events:auto; }
+  #logo{ position:relative; display:block; width:46px; height:46px; text-decoration:none; color:var(--ink); }
+  #logo .logo-img{
+    position:absolute; inset:0; width:100%; height:100%;
+    object-fit:contain;   /* resize to fit, never crop */
+    transition:opacity .2s ease;
+  }
+  #logo .logo-off{ opacity:0; }
+  #logo.dragging .logo-on{ opacity:0; }
+  #logo.dragging .logo-off{ opacity:1; }
+  .head-mid{
+    display:flex; gap:60px; align-items:flex-start; padding-top:4px;
+  }
+  .tagline{
+    font-family:var(--mono); font-size:10.5px; line-height:1.55; letter-spacing:.06em;
+    text-transform:uppercase; color:#cfd2d3; max-width:330px;
+  }
+  .clocks{
+    font-family:var(--mono); font-size:10.5px; line-height:1.55; letter-spacing:.06em;
+    text-transform:uppercase; color:#cfd2d3; white-space:nowrap;
+  }
+  .clocks .dot{ color:#7ee787; margin-right:6px; }
+  .clocks .tz{ color:var(--mute); margin-left:10px; }
+  #letsTalk{
+    background:var(--ink); color:#0a0a0b; font-weight:600; font-size:15px;
+    padding:14px 26px; border-radius:999px; text-decoration:none;
+    transition:transform .25s ease, background .25s ease; display:inline-block;
+  }
+  #letsTalk:hover{ transform:scale(1.05); background:#fff; }
+
+  /* ============ BOTTOM UI ============ */
+  #hint{
+    position:fixed; bottom:96px; left:50%; transform:translateX(-50%); z-index:18;
+    font-family:var(--mono); font-size:10px; letter-spacing:.25em; color:var(--mute);
+    text-transform:uppercase; pointer-events:none; transition:opacity .6s ease;
+    animation:hintPulse 2.4s ease-in-out infinite;
+  }
+  #hint.gone{ opacity:0; animation:none; }
+  @keyframes hintPulse{ 0%,100%{opacity:.4;} 50%{opacity:1;} }
+
+  nav#tabs{
+    position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:30;
+    display:flex; gap:4px; padding:5px;
+    background:rgba(9,9,10,.5); backdrop-filter:blur(22px); -webkit-backdrop-filter:blur(22px);
+    border:1px solid rgba(255,255,255,.06); border-radius:999px;
+  }
+  /* sliding pill behind the active tab — same "wind up, then fast with a
+     bounce" easing as #viewToggle's thumb, for a consistent feel between the
+     two controls that share this bottom bar */
+  nav#tabs .tab-thumb{
+    position:absolute; top:5px; left:0; height:calc(100% - 10px); border-radius:999px;
+    background:var(--ink); z-index:0;
+    transition:transform .5s cubic-bezier(.68,-0.55,.27,1.55),
+               width .5s cubic-bezier(.68,-0.55,.27,1.55);
+  }
+  nav#tabs button{
+    position:relative; z-index:1;
+    font-weight:600; font-size:15px; color:#d6d8d9;
+    padding:12px 24px; border-radius:999px; transition:color .25s;
+  }
+  nav#tabs button:hover{ color:#fff; }
+  nav#tabs button.active{ color:#0a0a0b; }
+
+  #uploadBtn{
+    position:fixed; right:28px; bottom:28px; z-index:30;
+    background:var(--ink); color:#0a0a0b; font-weight:600; font-size:15px;
+    padding:15px 26px; border-radius:999px;
+    display:flex; align-items:center; gap:9px;
+    transition:transform .25s ease;
+  }
+  #uploadBtn:hover{ transform:scale(1.05); }
+  #uploadBtn svg{ display:block; }
+  #uploadBtn[hidden]{ display:none; }   /* the [hidden] UA rule alone loses to the #uploadBtn{display:flex} rule above */
+
+  /* pill-shaped switch: a single sliding thumb behind two icon buttons, rather
+     than each button independently swapping its own background — matches the
+     reference's frosted, darker glass treatment and reads as one control. */
+  #viewToggle{
+    position:fixed; left:28px; bottom:28px; z-index:30;
+    display:flex; width:88px; height:44px;
+    background:rgba(9,9,10,.5); backdrop-filter:blur(22px); -webkit-backdrop-filter:blur(22px);
+    border:1px solid rgba(255,255,255,.06); border-radius:999px;
+  }
+  #viewToggle .thumb{
+    position:absolute; top:3px; left:3px; width:38px; height:38px; border-radius:50%;
+    background:var(--ink);
+    /* easeInOutBack: a beat of anticipation (pulls back slightly before it even
+       starts moving forward) then accelerates and overshoots past the target
+       before settling — the "slight delay at the start, quicker with a bounce
+       at the end" feel that was asked for */
+    transition:transform .5s cubic-bezier(.68,-0.55,.27,1.55);
+  }
+  #viewToggle.flat .thumb{ transform:translateX(44px); }
+  #viewToggle button{
+    position:relative; z-index:1; width:44px; height:44px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    color:#9a9ea1; transition:color .25s ease;
+  }
+  #viewToggle button.active{ color:#0a0a0b; }
+
+  /* ============ PANELS (About / Careers) ============ */
+  .panel{
+    position:fixed; inset:0; z-index:15; display:flex; align-items:center;
+    padding:120px 8vw 140px; visibility:hidden; opacity:0;
+    transform:translateY(40px); transition:all .55s cubic-bezier(.2,.7,.2,1);
+    overflow:auto;
+  }
+  .panel.open{ visibility:visible; opacity:1; transform:translateY(0); }
+  .panel-inner{ max-width:820px; }
+  .panel .kicker{
+    font-family:var(--mono); font-size:11px; letter-spacing:.25em; color:var(--mute);
+    text-transform:uppercase; margin-bottom:26px;
+  }
+  .panel h2{
+    font-size:clamp(34px,5.2vw,64px); font-weight:600; line-height:1.08;
+    letter-spacing:-.02em; margin-bottom:34px;
+  }
+  .panel h2 em{ font-style:normal; color:var(--mute); }
+  .panel p{ font-size:17px; line-height:1.65; color:#c4c7c8; max-width:560px; margin-bottom:18px; }
+  .panel .facts{
+    display:flex; flex-wrap:wrap; gap:40px; margin-top:44px;
+    font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+  }
+  .panel .facts b{ display:block; color:var(--mute); font-weight:400; margin-bottom:8px; }
+  .panel .facts span{ color:var(--ink); }
+  .panel a{ color:var(--ink); }
+
+  /* ============ UPLOAD MODAL ============ */
+  #uploadModal{
+    position:fixed; inset:0; z-index:50; display:flex;
+    align-items:center; justify-content:center; padding:24px;
+    visibility:hidden; opacity:0; transition:opacity .35s ease, visibility .35s;
+  }
+  #uploadModal.open{ visibility:visible; opacity:1; }
+  #uploadModal .backdrop{ position:absolute; inset:0; background:rgba(4,4,5,.72); backdrop-filter:blur(10px); }
+  #uploadModal .sheet{
+    position:relative; width:min(860px,100%); max-height:88vh; overflow:auto;
+    background:#101012; border:1px solid rgba(255,255,255,.09); border-radius:20px;
+    padding:30px 32px 26px; transform:translateY(24px); transition:transform .35s cubic-bezier(.2,.7,.2,1);
+  }
+  #uploadModal.open .sheet{ transform:translateY(0); }
+  .sheet-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; }
+  .sheet-head h3{ font-size:22px; font-weight:600; letter-spacing:-.01em; }
+  .sheet-head .sub{ font-family:var(--mono); font-size:10.5px; color:var(--mute);
+    letter-spacing:.08em; text-transform:uppercase; margin-top:5px; }
+  #closeModal{
+    width:40px; height:40px; border-radius:50%; border:1px solid rgba(255,255,255,.12);
+    display:flex; align-items:center; justify-content:center; color:#c6c9ca;
+    transition:all .25s;
+  }
+  #closeModal:hover{ background:var(--ink); color:#0a0a0b; }
+  #dropzone{
+    border:1.5px dashed #34383c; border-radius:14px; padding:34px 20px;
+    text-align:center; transition:all .25s ease; cursor:pointer; margin-bottom:22px;
+  }
+  #dropzone:hover,#dropzone.over{ border-color:#e8e8e6; background:rgba(255,255,255,.03); }
+  #dropzone .dz-big{ font-size:17px; font-weight:600; margin-bottom:6px; }
+  #dropzone .dz-small{ font-family:var(--mono); font-size:10.5px; letter-spacing:.08em;
+    color:var(--mute); text-transform:uppercase; }
+  #slotGrid{
+    display:grid; grid-template-columns:repeat(6,1fr); gap:9px;
+  }
+  .slot-item{
+    position:relative; aspect-ratio:16/9; border-radius:8px; overflow:hidden;
+    border:1px solid #26292c; background:#161619;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    font-family:var(--mono); font-size:11px; letter-spacing:.15em; color:#4a4e52;
+    transition:border-color .2s ease;
+  }
+  .slot-item:hover{ border-color:#4c5054; }
+  .slot-item img{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .slot-item .slot-x{
+    position:absolute; top:5px; right:5px; width:24px; height:24px; border-radius:50%;
+    background:rgba(8,8,9,.8); color:#e8e8e6; font-size:13px; line-height:1;
+    display:none; align-items:center; justify-content:center; z-index:2;
+  }
+  .slot-item.filled:hover .slot-x{ display:flex; }
+  .slot-item .slot-x:hover{ background:#e33; }
+  .slot-item .slot-edit{
+    position:absolute; top:5px; left:5px; width:24px; height:24px; border-radius:50%;
+    background:rgba(8,8,9,.8); color:#e8e8e6; font-size:12px; line-height:1;
+    display:none; align-items:center; justify-content:center; z-index:2;
+  }
+  .slot-item:hover .slot-edit{ display:flex; }
+  .slot-item .slot-edit:hover{ background:#565c62; }
+  .slot-item .slot-pin{
+    position:absolute; bottom:5px; right:5px; width:24px; height:24px; border-radius:50%;
+    background:rgba(8,8,9,.8); color:#e8e8e6; font-size:12px; line-height:1;
+    display:none; align-items:center; justify-content:center; z-index:2;
+  }
+  .slot-item.filled:hover .slot-pin{ display:flex; }
+  .slot-item .slot-pin:hover{ background:#565c62; }
+  .slot-item.pinned .slot-pin{ display:flex; background:#e8b13a; color:#100e08; }
+  .slot-item.pinned{ box-shadow:inset 0 0 0 2px #e8b13a; }
+  .slot-item .slot-before{
+    position:absolute; bottom:5px; left:5px; width:24px; height:24px; border-radius:50%;
+    background:rgba(8,8,9,.8); color:#e8e8e6; font-size:12px; line-height:1;
+    display:none; align-items:center; justify-content:center; z-index:2;
+  }
+  .slot-item.filled:hover .slot-before{ display:flex; }
+  .slot-item .slot-before:hover{ background:#565c62; }
+  .slot-item.has-before .slot-before{ display:flex; background:#3a7ca5; color:#fff; }
+  .sheet-foot{
+    display:flex; justify-content:space-between; align-items:center; margin-top:20px;
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--mute);
+  }
+  #clearAll{ color:#b96a6a; letter-spacing:.08em; text-transform:uppercase;
+    font-family:var(--mono); font-size:10.5px; }
+  #clearAll:hover{ color:#e88; }
+
+  /* ============ EDIT-TEXT MODAL ============ */
+  #editModal{
+    position:fixed; inset:0; z-index:55; display:flex;
+    align-items:center; justify-content:center; padding:24px;
+    visibility:hidden; opacity:0; transition:opacity .3s ease, visibility .3s;
+  }
+  #editModal.open{ visibility:visible; opacity:1; }
+  #editModal .backdrop{ position:absolute; inset:0; background:rgba(4,4,5,.75); backdrop-filter:blur(8px); }
+  #editModal .sheet{
+    position:relative; width:min(460px,100%);
+    background:#101012; border:1px solid rgba(255,255,255,.09); border-radius:18px;
+    padding:26px 28px 22px; transform:translateY(20px); transition:transform .3s cubic-bezier(.2,.7,.2,1);
+  }
+  #editModal.open .sheet{ transform:translateY(0); }
+  .edit-fields{ display:flex; flex-direction:column; gap:14px; margin:6px 0 20px; }
+  .edit-fields label{
+    display:flex; flex-direction:column; gap:6px;
+    font-family:var(--mono); font-size:10px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--mute);
+  }
+  .edit-fields input, .edit-fields select{
+    font-family:var(--grot); font-size:14px; color:var(--ink); background:#17171a;
+    border:1px solid #2b2e31; border-radius:8px; padding:10px 12px; outline:none;
+    transition:border-color .2s ease; width:100%;
+  }
+  .edit-fields input:focus, .edit-fields select:focus{ border-color:#565c62; }
+  .edit-fields select{ appearance:none; -webkit-appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' stroke='%23878b8e' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat:no-repeat; background-position:right 12px center; padding-right:34px; }
+  .edit-year input{ max-width:140px; }
+  #editModal .sheet-foot{ justify-content:flex-end; gap:10px; }
+  #editModal .sheet-foot button{
+    font-family:var(--grot); font-size:14px; font-weight:600; letter-spacing:0;
+    text-transform:none; padding:11px 20px; border-radius:999px; transition:all .2s ease;
+  }
+  #editReset{ color:var(--mute); }
+  #editReset:hover{ color:var(--ink); }
+  #editSave{ background:var(--ink); color:#0a0a0b; }
+  #editSave:hover{ transform:scale(1.04); }
+
+  /* ============ ADMIN LOGIN ============ */
+  #loginModal{
+    position:fixed; inset:0; z-index:60; display:flex;
+    align-items:center; justify-content:center; padding:24px;
+    visibility:hidden; opacity:0; transition:opacity .3s ease, visibility .3s;
+  }
+  #loginModal.open{ visibility:visible; opacity:1; }
+  #loginModal .backdrop{ position:absolute; inset:0; background:rgba(4,4,5,.75); backdrop-filter:blur(8px); }
+  #loginModal .sheet{
+    position:relative; width:min(360px,100%);
+    background:#101012; border:1px solid rgba(255,255,255,.09); border-radius:18px;
+    padding:26px 28px 22px; transform:translateY(20px); transition:transform .3s cubic-bezier(.2,.7,.2,1);
+  }
+  #loginModal.open .sheet{ transform:translateY(0); }
+  #loginForm{ margin-top:6px; }
+  #loginSubmit{
+    width:100%; margin-top:4px; background:var(--ink); color:#0a0a0b;
+    font-family:var(--grot); font-size:14px; font-weight:600;
+    padding:11px 20px; border-radius:999px; transition:transform .2s ease;
+  }
+  #loginSubmit:hover{ transform:scale(1.02); }
+  #loginSubmit:disabled{ opacity:.6; transform:none; }
+  #loginError{
+    font-family:var(--mono); font-size:11px; letter-spacing:.04em; color:#e08a8a;
+    margin-top:-2px;
+  }
+  #logoutBtn{
+    position:fixed; right:28px; bottom:84px; z-index:30;
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--mute); padding:6px 10px; border-radius:999px; transition:color .2s ease;
+  }
+  #logoutBtn:hover{ color:var(--ink); }
+
+  /* ============ TOAST ============ */
+  #toast{
+    position:fixed; bottom:96px; left:50%; transform:translate(-50%,14px); z-index:60;
+    background:#17171a; border:1px solid rgba(255,255,255,.12); border-radius:10px;
+    padding:11px 20px; font-family:var(--mono); font-size:11px; letter-spacing:.06em;
+    color:#e2e4e5; opacity:0; pointer-events:none; transition:all .35s ease;
+    max-width:80vw; text-align:center;
+  }
+  #toast.show{ opacity:1; transform:translate(-50%,0); }
+
+  @media (max-width:1050px){ .head-mid .tagline{ display:none; } }
+  @media (max-width:760px){
+    .head-mid{ display:none; }
+    header{ padding:16px 18px; }
+    #uploadBtn{ right:16px; bottom:76px; padding:13px 20px; }
+    #viewToggle{ display:none; }
+    nav#tabs{ bottom:16px; }
+    nav#tabs button{ padding:10px 16px; font-size:13.5px; }
+    #slotGrid{ grid-template-columns:repeat(4,1fr); }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    #hint{ animation:none; }
+    #letsTalk, #uploadBtn{ transition:none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="stage"></div>
+<div id="vignette"></div>
+
+<header>
+  <a id="logo" href="#" aria-label="WEMORY Studio">
+    <img class="logo-img logo-on"  src="Asset/Me-Nov25d small-rounded2ON.webp"  alt="">
+    <img class="logo-img logo-off" src="Asset/Me-Nov25d small-rounded2OFF.webp" alt="">
+  </a>
+  <div class="head-mid">
+    <div class="tagline">WEMORY IS A ONE&#8209;MAN VISUAL STUDIO CRAFTING SCROLL&#8209;STOPPING THUMBNAILS, MOTION GRAPHICS &amp; DESIGN FOR CREATORS.</div>
+    <div class="clocks">
+      <div><span class="dot">&#9679;</span>INDONESIA <span class="tz" id="clockPml">--:--</span></div>
+      <div><span class="dot">&#9679;</span>YOUR TIME&nbsp;&nbsp;&nbsp; <span class="tz" id="clockLocal">--:--</span></div>
+    </div>
+  </div>
+  <a id="letsTalk" href="mailto:adelna.abadi20@gmail.com?subject=Let%27s%20Talk%20%E2%80%94%20WEMORY%20Studio">Let's Talk</a>
+</header>
+
+<div id="hint">[ DRAG TO EXPLORE ]</div>
+
+<section class="panel" id="panel-about">
+  <div class="panel-inner">
+    <div class="kicker">About — WEMORY&reg; Studio</div>
+    <h2>Visuals that stop the scroll, <em>made in Pemalang.</em></h2>
+    <p>WEMORY is the independent studio of <strong>Agus Susanto</strong> — a graphic designer
+      specialising in YouTube thumbnails, motion graphics and visual design for creators
+      and brands.</p>
+    <p>Every frame is built to earn the click: bold type, sharp contrast, and stories told
+      in a single image.</p>
+    <div class="facts">
+      <div><b>Services</b><span>Thumbnail Design<br>Motion Graphic<br>Graphic Design</span></div>
+      <div><b>Based in</b><span>Pemalang, Central Java,<br>Indonesia (GMT+7)</span></div>
+      <div><b>Contact</b><span><a href="mailto:adelna.abadi20@gmail.com">adelna.abadi20@gmail.com</a></span></div>
+    </div>
+  </div>
+</section>
+
+<section class="panel" id="panel-careers">
+  <div class="panel-inner">
+    <div class="kicker">Careers — WEMORY&reg; Studio</div>
+    <h2>No open roles — <em>for now.</em></h2>
+    <p>WEMORY is currently a one-person studio. There are no vacancies at the moment,
+      but collaborations and project inquiries are always welcome.</p>
+    <div class="facts">
+      <div><b>Say hi</b><span><a href="mailto:adelna.abadi20@gmail.com">adelna.abadi20@gmail.com</a></span></div>
+    </div>
+  </div>
+</section>
+
+<nav id="tabs">
+  <span class="tab-thumb"></span>
+  <button data-tab="work" class="active">Work</button>
+  <button data-tab="about">About</button>
+  <button data-tab="careers">Careers</button>
+</nav>
+
+<div id="viewToggle">
+  <span class="thumb"></span>
+  <button id="btnCurved" class="active" title="Curved view" aria-label="Curved view">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M1 12 Q8 6 15 12" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M1 8 Q8 2 15 8" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+  </button>
+  <button id="btnFlat" title="Flat view" aria-label="Flat view">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M1 5 H15 M1 10 H15" stroke="currentColor" stroke-width="1.6"/></svg>
+  </button>
+</div>
+
+<button id="uploadBtn" hidden>
+  <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 11V2M7.5 2 L3.5 6M7.5 2 L11.5 6M2 13h11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  Upload
+</button>
+
+<div id="uploadModal" role="dialog" aria-modal="true">
+  <div class="backdrop"></div>
+  <div class="sheet">
+    <div class="sheet-head">
+      <div>
+        <h3>Upload Karya</h3>
+        <div class="sub">Karya otomatis terpasang ke slot kosong &middot; grid meluas sendiri &middot; tersimpan lokal di browser</div>
+      </div>
+      <button id="closeModal" aria-label="Tutup">&#10005;</button>
+    </div>
+    <div id="dropzone">
+      <div class="dz-big">Tarik &amp; letakkan gambar di sini</div>
+      <div class="dz-small">atau klik untuk pilih file &middot; JPG / PNG / WEBP &middot; bisa banyak sekaligus</div>
+    </div>
+    <div id="slotGrid"></div>
+    <div class="sheet-foot">
+      <span id="slotCount">0 / 24 slot terisi</span>
+      <button id="clearAll">Hapus semua</button>
+    </div>
+  </div>
+</div>
+
+<div id="editModal" role="dialog" aria-modal="true">
+  <div class="backdrop"></div>
+  <div class="sheet">
+    <div class="sheet-head">
+      <div>
+        <h3>Edit Teks Kartu</h3>
+        <div class="sub" id="editSlotLabel">SLOT 01</div>
+      </div>
+      <button id="closeEdit" aria-label="Tutup">&#10005;</button>
+    </div>
+    <div class="edit-fields">
+      <label>Judul Karya<input type="text" id="editTitle" maxlength="60" placeholder="mis. Thumbnail Vlog Harian"></label>
+      <label>Tag 1 &mdash; Jenis Konten<select id="editTag1"></select></label>
+      <label>Tag 2 &mdash; Kategori<select id="editTag2"></select></label>
+      <label class="edit-year">Tahun<input type="number" id="editYear" min="2015" max="2100" placeholder="2026"></label>
+    </div>
+    <div class="sheet-foot">
+      <button id="editReset">Kembalikan default</button>
+      <button id="editSave" class="primary">Simpan</button>
+    </div>
+  </div>
+</div>
+
+<div id="loginModal" role="dialog" aria-modal="true">
+  <div class="backdrop"></div>
+  <div class="sheet">
+    <div class="sheet-head">
+      <div>
+        <h3>Admin Login</h3>
+        <div class="sub">Khusus WEMORY Studio</div>
+      </div>
+      <button id="closeLogin" aria-label="Tutup">&#10005;</button>
+    </div>
+    <form id="loginForm" class="edit-fields">
+      <label>Email<input type="email" id="loginEmail" required autocomplete="username"></label>
+      <label>Password<input type="password" id="loginPassword" required autocomplete="current-password"></label>
+      <div id="loginError" hidden></div>
+      <button type="submit" id="loginSubmit">Masuk</button>
+    </form>
+  </div>
+</div>
+
+<button id="logoutBtn" hidden>Logout</button>
+
+<input type="file" id="fileMulti" accept="image/*" multiple hidden>
+<input type="file" id="fileSingle" accept="image/*" hidden>
+<input type="file" id="fileBefore" accept="image/*" hidden>
+
+<div id="toast"></div>
+
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+/* ================= BACKEND (Supabase) =================
+   Public read, admin-only write — enforced server-side via Postgres row-level
+   security (see the SQL run once in the Supabase dashboard), not by anything
+   in this file. The URL + publishable key below are meant to be public (same
+   trust level as any other client-side API endpoint); they only work within
+   whatever RLS policies allow. */
+const SUPABASE_URL = 'https://cazupukzziewlchhwhow.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_POsck3BMyKIm_L6PH6yMig_QTl6AZfL';
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const WORKS_BUCKET = 'artworks';
+
+/* ================= CONFIG ================= */
+const COLS = 6;                                // columns in the unique looping block
+let   SLOTS = 0;                               // grows in rows of COLS as works are added
+let   ROWS  = 0;
+const CARD_W = 384, CARD_H = 216;              // every card is exactly 16:9
+const CELL_W = CARD_W + 64;                    // 32px gutter each side
+const CARD_T = 34;                             // top margin — just enough for the head row
+const CARD_B = 42;                             // bottom margin — foot row + tag chips
+const CELL_H = CARD_T + CARD_H + CARD_B;       // margins sized to content, not an arbitrary gutter
+const CARD_L = (CELL_W - CARD_W) / 2;
+// mesh tessellation: the curved edge is really a chain of straight polygon
+// chords, not a true curve — too few segments and those chords read as small
+// "patah-patah" kinks along the silhouette (only visible once curveAmt>0,
+// since a flat rectangle's edges ARE straight lines, no approximation needed)
+const SEG_X = 96, SEG_Y = 56;                  // card mesh tessellation
+const LSEG_X = 48, LSEG_Y = 40;                // label sheet tessellation (covers whole cell)
+const PERSP = 1300;                            // camera distance in px
+const THETA_MAX = 1.55;                        // hard cap just under 90°
+// the forward (Z) push is damped relative to the rotation: at full strength the
+// perspective magnification near the clamp can grow so fast that a card's own
+// far edge projects to a SMALLER screen-x than a point nearer its center — the
+// mesh folds back on itself and the gap between the two overlapping lobes shows
+// as a black notch cutting into the card. Damping Z keeps the bend looking the
+// same (rotation is untouched) while keeping screen-x monotonic across a card's
+// width, so it can never fold. Must stay identical in domeVert/BG_VERT/warp()/
+// axisExtent() — they all place the same surface, just for different purposes.
+const Z_DAMP = 0.85;
+// ANG_X/ANG_Y (the angle reached at the screen edge) is SOLVED PER VIEWPORT
+// SIZE in fitViewport(), not a fixed constant — here's why that's required.
+// The screen position a curved card projects to is x = R*sin(t)*PERSP/(PERSP-z),
+// which is NOT linear in t: sin() compresses it, and while the perspective
+// divide partly re-expands it, the two never fully cancel out. That means for
+// ANY finite curve radius R, the maximum possible projected position (at
+// t=THETA_MAX, i.e. as far out as a card can ever be) is *always* somewhat
+// LESS than what a flat (uncurved) card would reach at the same world position.
+// Whether that shortfall lands past the visible edge (invisible, fine) or
+// short of it (a permanent dark gap — MORE cards can never fill it, because
+// every card beyond the clamp projects to that same maximum, not further)
+// depends on the *absolute pixel* size of the half-viewport, because PERSP is
+// a fixed pixel distance that doesn't scale with the window. A constant ANG_X
+// that happened to reach the edge on one screen will fall short on a smaller
+// or differently-shaped one — which is exactly what caused the gap this fixes
+// (it showed on whichever axis — top/bottom or left/right — had the smaller
+// half-viewport in px). Solving per-axis, per-resize keeps every side flush.
+let ANG_X = 1.4, ANG_Y = 1.4;   // placeholders; fitViewport() overwrites these before first frame
+function domeXMax(R){
+  const q = R * Math.sin(THETA_MAX);
+  const z = R * (1 - Math.cos(THETA_MAX)) * Z_DAMP;
+  return q * PERSP / (PERSP - z);
+}
+// largest curve radius R can be while STILL just reaching halfVp is what we
+// want — i.e. the smallest (steepest, most dramatic) R whose domeXMax still
+// clears halfVp, plus a small safety margin so cell/pixel rounding can't
+// reopen a hairline gap.
+// R is capped well below the point where z approaches PERSP: past that, the
+// perspective divide (PERSP-z) heads to zero and domeXMax flips to a huge
+// NEGATIVE number — which the bracket-growing loop below reads as "still too
+// small", so it keeps doubling forever. R_CAP keeps every candidate R on the
+// sane side of that singularity.
+const R_CAP = PERSP * 0.92 / ((1 - Math.cos(THETA_MAX)) * Z_DAMP);
+function solveCurveAng(halfVp){
+  let lo = 1, hi = Math.min(Math.max(halfVp * 4, 10), R_CAP);
+  while (hi < R_CAP && domeXMax(hi) < halfVp) hi = Math.min(hi * 2, R_CAP);
+  for (let i = 0; i < 40; i++){
+    const mid = (lo + hi) / 2;
+    if (domeXMax(mid) < halfVp) lo = mid; else hi = mid;
+  }
+  const R = Math.min(hi * 1.06, R_CAP);    // 6% safety margin
+  return halfVp / R;                       // back out the equivalent "angle at edge"
+}
+// Tag 1 = content format, a fixed picklist (editable only from the Edit dialog).
+// Tag 2 = asset type, drives the auto card code (T001, B001, ...) — new types
+// can be appended to both arrays later without touching any other logic.
+const TAG1_OPTIONS = ['One-Question', 'Facts & Stats', 'Before-After', 'Versus',
+                       'Quotes', 'Element of Surprise', 'Product Showcase'];
+const TAG2_OPTIONS = ['Thumbnail', 'Banner', 'Profile', 'Mockup'];
+const TAG2_CODE = { Thumbnail: 'T', Banner: 'B', Profile: 'P', Mockup: 'M' };
+const FRICTION = 0.93;
+const MARGIN = 260;                            // extra screen-px rendered beyond viewport
+const TEX_W = 800, TEX_H = 450;                // uploaded images are cover-cropped to this
+const LT_S = 1.5;                              // label texture supersampling (text crispness)
+const TEX_MAX = 48;                            // LRU cap per texture cache
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ================= SLOT SPECS (deterministic per slot) ================= */
+function mulberry32(s){
+  return function(){
+    s |= 0; s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const SPECS = [];
+function specFor(i){
+  if (!SPECS[i]){
+    const rnd = mulberry32(i * 1013 + 77);
+    const t1 = TAG1_OPTIONS[Math.floor(rnd() * TAG1_OPTIONS.length)];
+    SPECS[i] = {
+      title: 'UNTITLED ' + String(i + 1).padStart(2, '0'),
+      // every new card defaults to "Thumbnail" for now (more Tag 2 types land
+      // later) — not randomised, per instruction
+      tags: [t1, 'Thumbnail'],
+      year: 2022 + Math.floor(rnd() * 5),
+    };
+  }
+  return SPECS[i];
+}
+
+// a user's custom text (from the Edit dialog) overrides the auto-generated
+// placeholder spec field-by-field, falling back to the generated value for
+// whichever fields the user left blank
+function effectiveSpec(slot){
+  const base = specFor(slot);
+  const o = metaOverrides[slot];
+  if (!o) return base;
+  return {
+    title: o.title || base.title,
+    tags:  (o.tags && o.tags.length === 2) ? o.tags : base.tags,
+    year:  o.year || base.year,
+  };
+}
+
+// the card's own display "code" (T001, B002, ...) replaces the old free-text
+// "client" field: the letter comes from this slot's Tag 2, the number is this
+// slot's rank among every slot of that same type from slot 0 up to here. This
+// recomputes on demand (label textures are cheap to regenerate) rather than
+// being cached standalone, so it's always consistent with the current tags —
+// note editing an EARLIER slot's Tag 2 can shift the numbering of later
+// same-type cards; only the slot you actually save gets its texture refreshed
+// immediately, others catch up next time they're (re)built.
+function cardCode(slot){
+  const letter = TAG2_CODE[effectiveSpec(slot).tags[1]] || 'T';
+  let n = 0;
+  for (let i = 0; i <= slot; i++){
+    if ((TAG2_CODE[effectiveSpec(i).tags[1]] || 'T') === letter) n++;
+  }
+  return letter + String(n).padStart(3, '0');
+}
+
+/* ================= STATE ================= */
+const stage = document.getElementById('stage');
+
+let vw = innerWidth, vh = innerHeight;
+let hoverDebug = null;
+// smaller screens see the grid slightly zoomed out so more cards fit
+const baseZoom = () => vw < 700 ? 0.62 : vw < 1200 ? 0.8 : 1;
+let camX = CELL_W * 1.5, camY = CELL_H * 1.2;   // camera center, world coords (y grows downward)
+let vx = 0, vy = 0;
+let zoom = reduceMotion ? baseZoom() : baseZoom() * 0.55, targetZoom = baseZoom();
+let curveAmt = 1, targetCurve = 1;               // 1 = curved dome, 0 = flat wall
+let dragging = false, panelOpen = false;
+let mouseX = -1e4, mouseY = -1e4;
+let glowOp = 0;
+// subtle "look toward the mouse" parallax (phantom.land-style): the whole dome's
+// viewing angle nudges toward wherever the mouse sits, as if the camera swivelled
+// to glance that way — card WORLD positions (camX/camY) never change, only the
+// angle they're projected at, via uLook added into tx/ty right before the dome
+// clamp (see domeVert/BG_VERT/warp()). Smoothed so it trails the mouse gently
+// rather than snapping. Tracked SEPARATELY from `mouseX/mouseY` (which stay
+// #stage-scoped, for card hover hit-testing, and reset to a far-off sentinel on
+// pointerleave so no card lights up behind the header/buttons) — the tilt input
+// is read at document level instead, so it keeps responding even while the
+// cursor sits over UI chrome or the About/Careers overlay (both just blurred
+// panels floating above the still-rendering gallery, not a real block).
+const LOOK_MAX = 0.14;        // radians of tilt at the viewport edge
+const LOOK_EASE = 0.07;       // how fast the tilt chases the cursor
+const LOOK_EASE_RETURN = 0.02; // slower ease back to centered once the cursor leaves the window
+let lookX = 0, lookY = 0;
+let tiltX = innerWidth / 2, tiltY = innerHeight / 2;
+let mouseInWindow = false;
+
+const urls  = [];       // slot -> objectURL
+const names = [];       // slot -> filename
+const beforeUrls = [];  // slot -> public URL of the "before" (pre-edit) reference image, or null
+const metaOverrides = [];   // slot -> {title,tags:[t1,t2],year} | null
+const pinnedSlots = [];     // slots the user picked as "feature this on load"
+// slot -> another (real) slot whose ARTWORK IMAGE it should visually mirror,
+// for slots that grew alongside a new upload but have no design of their own
+// yet — a plain "AWAITING WORK" placeholder for every filler slot in a freshly
+// grown row read as noticeably empty in the live gallery, so these borrow a
+// real image instead. Title/tag/year text stays this slot's own auto-generated
+// spec (see specFor/effectiveSpec) — only the picture is mirrored. null = show
+// the genuine placeholder (no suitable source found, or this slot has its own
+// upload). See assignDuplicatesForNewSlots() for how sources are picked.
+const duplicateOf = [];
+
+const cells = new Map();  // "c_r" -> cell entry
+const pool  = [];
+
+const mod = (n, m) => ((n % m) + m) % m;
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+// world-space center of a given slot's cell — used to point the camera at a
+// specific pinned card on load, same (col,row)<->slot mapping the render
+// loop uses elsewhere (mod(r,ROWS)*COLS + mod(c,COLS))
+function slotCenter(slot){
+  const col = mod(slot, COLS), row = Math.floor(slot / COLS);
+  return { x: col * CELL_W + CELL_W / 2, y: row * CELL_H + CELL_H / 2 };
+}
+
+/* ================= THREE.JS SETUP ================= */
+let renderer = null;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+} catch (err) {
+  console.error('WebGL unavailable', err);
+}
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, 1, 50, 8000);
+camera.position.set(0, 0, PERSP);
+camera.lookAt(0, 0, 0);
+const maxAniso = renderer ? Math.min(8, renderer.capabilities.getMaxAnisotropy()) : 1;
+
+/* ================= POST-PROCESS: SCREEN-EDGE GLOW ================= */
+/* phantom.land doesn't blur the cards themselves near the rim — it washes a
+   soft, colour-matched glow in from the screen's outer edges instead. We render
+   the sharp scene once, blur a half-res copy of it, then additively blend that
+   blur back in only near the edges/corners (cards everywhere stay crisp). */
+let sceneRT = null, blurRT1 = null, blurRT2 = null;
+const ppScene  = new THREE.Scene();
+const ppCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const ppQuad   = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+ppScene.add(ppQuad);
+
+const PP_VERT = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+const BLUR_FRAG = /* glsl */`
+  uniform sampler2D uTex; uniform vec2 uDir; uniform vec2 uTexel;
+  varying vec2 vUv;
+  void main(){
+    vec3 sum = vec3(0.0); float wsum = 0.0;
+    for (int i = -5; i <= 5; i++){
+      float w = exp(-float(i * i) * 0.09);
+      sum += texture2D(uTex, vUv + uDir * uTexel * float(i)).rgb * w;
+      wsum += w;
+    }
+    gl_FragColor = vec4(sum / wsum, 1.0);
+  }
+`;
+const EDGE_FRAG = /* glsl */`
+  uniform sampler2D uSharp; uniform sampler2D uGlow;
+  varying vec2 vUv;
+  void main(){
+    vec3 sharpC = texture2D(uSharp, vUv).rgb;
+    vec3 glowC  = texture2D(uGlow, vUv).rgb;
+    vec2 c = (vUv - 0.5) * 2.0;
+    float d = max(abs(c.x), abs(c.y));   // square-ish falloff so corners glow too
+    float edge = smoothstep(0.38, 1.0, d);
+    gl_FragColor = vec4(sharpC + glowC * edge * 0.6, 1.0);
+  }
+`;
+let blurMatH = null, blurMatV = null, edgeMat = null;
+if (renderer){
+  blurMatH = new THREE.ShaderMaterial({
+    uniforms: { uTex: { value: null }, uDir: { value: new THREE.Vector2(1, 0) }, uTexel: { value: new THREE.Vector2() } },
+    vertexShader: PP_VERT, fragmentShader: BLUR_FRAG, depthTest: false, depthWrite: false,
+  });
+  blurMatV = new THREE.ShaderMaterial({
+    uniforms: { uTex: { value: null }, uDir: { value: new THREE.Vector2(0, 1) }, uTexel: { value: new THREE.Vector2() } },
+    vertexShader: PP_VERT, fragmentShader: BLUR_FRAG, depthTest: false, depthWrite: false,
+  });
+  edgeMat = new THREE.ShaderMaterial({
+    uniforms: { uSharp: { value: null }, uGlow: { value: null } },
+    vertexShader: PP_VERT, fragmentShader: EDGE_FRAG, depthTest: false, depthWrite: false,
+  });
+}
+function ppPass(material, target){
+  ppQuad.material = material;
+  renderer.setRenderTarget(target);
+  renderer.render(ppScene, ppCamera);
+}
+
+function fitViewport(){
+  vw = innerWidth; vh = innerHeight;
+  // pick the fov so that 1 world unit == 1 CSS pixel on the z=0 plane
+  camera.aspect = vw / vh;
+  camera.fov = 2 * Math.atan((vh / 2) / PERSP) * 180 / Math.PI;
+  camera.updateProjectionMatrix();
+  // re-solve the curve so the dome's own reach always lands exactly on this
+  // viewport's edges, on every axis, at every size/aspect ratio (see the long
+  // comment above domeXMax/solveCurveAng for why a fixed angle can't do this)
+  ANG_X = solveCurveAng(vw / 2);
+  ANG_Y = solveCurveAng(vh / 2);
+  U.uAng.value.set(ANG_X, ANG_Y);
+  if (renderer){
+    renderer.setSize(vw, vh);
+    const rw = Math.max(2, Math.floor(vw / 2)), rh = Math.max(2, Math.floor(vh / 2));
+    const rtOpts = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
+    if (!sceneRT){
+      // the renderer's own antialias:true only smooths edges when drawing
+      // straight to the canvas — once we render the scene into an offscreen
+      // WebGLRenderTarget first (for the edge-glow post-process), that setting
+      // no longer applies at all, and every card/mesh silhouette rasterizes
+      // with hard, aliased (jagged) edges regardless of how fine the mesh
+      // tessellation is. `samples` turns MSAA back on for this target
+      // specifically — blurRT1/2 don't need it, they get smoothed by the blur
+      // pass itself either way.
+      sceneRT = new THREE.WebGLRenderTarget(vw, vh, { ...rtOpts, samples: 4 });
+      blurRT1 = new THREE.WebGLRenderTarget(rw, rh, rtOpts);
+      blurRT2 = new THREE.WebGLRenderTarget(rw, rh, rtOpts);
+    } else {
+      sceneRT.setSize(vw, vh);
+      blurRT1.setSize(rw, rh);
+      blurRT2.setSize(rw, rh);
+    }
+    blurMatH.uniforms.uTexel.value.set(1 / vw, 1 / vh);
+    blurMatV.uniforms.uTexel.value.set(1 / rw, 1 / rh);
+  }
+  U.uVp.value.set(vw, vh);
+}
+
+/* shared uniforms — one JS object each, referenced by every material,
+   so a single assignment per frame updates the whole scene */
+const U = {
+  uCam:   { value: new THREE.Vector2(camX, camY) },
+  uZoom:  { value: zoom },
+  uCurve: { value: curveAmt },
+  uVp:    { value: new THREE.Vector2(vw, vh) },
+  uAng:   { value: new THREE.Vector2(ANG_X, ANG_Y) },
+  uLook:  { value: new THREE.Vector2(0, 0) },
+};
+/* hover backdrop state, consumed by the background sheet's fragment shader */
+const GU = {
+  uGlowRect: { value: new THREE.Vector4(0, 0, CELL_W, CELL_H) },  // hovered cell, camera-local px (see uCamLocal below)
+  uGlowTex:  { value: null },                                     // set once placeholderTex exists
+  uGlowAmt:  { value: 0 },
+  // camX/camY minus the nearest CELL-aligned point behind them, recomputed every
+  // frame — see the long comment on bgMesh below for why the grid-line sheet
+  // needs this instead of the raw (unbounded) uCam.
+  uCamLocal: { value: new THREE.Vector2(0, 0) },
+};
+
+/* The dome: every vertex is wrapped onto the inside of a horizontal + vertical
+   cylinder whose radius is fixed in *screen* space. The warp is one continuous
+   function of world position evaluated per GPU vertex, so cards, their meta text
+   sheets and the grid lines all lie on the same mathematical surface — no facets,
+   no drift between text and card. `zOff` lifts a layer slightly off the surface
+   (label sheets sit +3px in front of their card) without changing its curvature. */
+function domeVert(zOff){ return /* glsl */`
+  uniform vec2 uCam; uniform float uZoom; uniform float uCurve;
+  uniform vec2 uVp; uniform vec2 uAng; uniform vec2 uCellPos; uniform vec2 uLook;
+  varying vec2 vUv; varying float vShade;
+  void main(){
+    vUv = uv;
+    // world position of this vertex, y-down like the page
+    vec2 w = uCellPos + vec2(position.x, -position.y);
+    // screen-plane px, zoomed about the viewport center
+    vec2 p = (w - uCam) * uZoom;
+    float Rx = 0.5 * uVp.x / uAng.x;
+    float Ry = 0.5 * uVp.y / uAng.y;
+    // uLook nudges the viewing angle toward the mouse (mouse-parallax "look"),
+    // added before the dome clamp so cards stay put in world space (p is
+    // untouched) — only the angle they're seen at shifts.
+    float tx = clamp(p.x / Rx + uLook.x, -${THETA_MAX}, ${THETA_MAX});
+    float ty = clamp(p.y / Ry + uLook.y, -${THETA_MAX}, ${THETA_MAX});
+    vec3 q = vec3(Rx * sin(tx), Ry * sin(ty),
+                  (Rx * (1.0 - cos(tx)) + Ry * (1.0 - cos(ty))) * ${Z_DAMP});
+    vec3 m = mix(vec3(p, 0.0), q, uCurve);
+    m.z += ${zOff.toFixed(1)};
+    vShade = uCurve * (1.0 - cos(tx) * cos(ty));
+    gl_Position = projectionMatrix * viewMatrix * vec4(m.x, -m.y, m.z, 1.0);
+  }
+`; }
+
+const CARD_FRAG = /* glsl */`
+  uniform sampler2D uMap; uniform float uHover;
+  varying vec2 vUv; varying float vShade;
+  void main(){
+    // at extreme curvature a few triangles near the clamp boundary can turn
+    // almost degenerate, and perspective-correct interpolation can then overshoot
+    // vUv slightly outside 0..1 — clamping here keeps the texture sample sane
+    vec2 uv = clamp(vUv, 0.0, 1.0);
+    // artwork stays sharp at every angle — phantom.land doesn't blur the cards
+    // themselves, it adds a colored glow at the screen edges instead (post-process)
+    vec3 col = texture2D(uMap, uv).rgb;
+    // cards darken as they turn away — depth cue, like the reference
+    col *= 1.0 - 0.5 * clamp(vShade, 0.0, 1.0);
+    col *= 1.0 + 0.10 * uHover;
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+/* meta text sheet: a transparent cell-sized quad bent by the exact same vertex
+   shader as its card, so the text's curvature and position always match the card */
+const LABEL_FRAG = /* glsl */`
+  uniform sampler2D uMap;
+  varying vec2 vUv; varying float vShade;
+  void main(){
+    vec2 uv = clamp(vUv, 0.0, 1.0);   // guard against overshoot on near-degenerate triangles
+    vec4 t = texture2D(uMap, uv);     // stays sharp — no defocus, matches the card
+    float a = t.a * (1.0 - smoothstep(0.55, 0.92, vShade));   // fade text as its card turns away
+    if (a < 0.004) discard;
+    vec3 col = t.rgb * (1.0 - 0.45 * clamp(vShade, 0.0, 1.0));
+    gl_FragColor = vec4(col, a);
+  }
+`;
+
+const cardGeo  = new THREE.PlaneGeometry(CARD_W, CARD_H, SEG_X, SEG_Y);
+const labelGeo = new THREE.PlaneGeometry(CELL_W, CELL_H, LSEG_X, LSEG_Y);
+
+/* ================= CURVED GRID LINES + HOVER GLOW (background sheet) ================= */
+/* one big tessellated sheet spanning the whole visible dome, warped identically;
+   the fragment draws hairlines at CELL boundaries and, on hover, a soft wash of the
+   hovered artwork's average color — clipped to that card's own grid cell */
+const BG_VERT = /* glsl */`
+  uniform vec2 uCamLocal; uniform float uZoom; uniform float uCurve;
+  uniform vec2 uVp; uniform vec2 uAng; uniform vec2 uLook;
+  varying vec2 vWorld; varying float vShade;
+  void main(){
+    float Rx = 0.5 * uVp.x / uAng.x;
+    float Ry = 0.5 * uVp.y / uAng.y;
+    // mirror y on the way in AND out (like the cards) so triangle winding survives
+    vec2 p = vec2(position.x, -position.y) * vec2(Rx, Ry) * ${THETA_MAX} * 1.04;
+    // uCamLocal (not the raw, unbounded uCam) — see the comment on bgMesh's
+    // definition for why: this keeps vWorld small and precise regardless of how
+    // far the camera has actually panned over a long session.
+    vWorld = p / uZoom + uCamLocal;
+    float tx = clamp(p.x / Rx + uLook.x, -${THETA_MAX}, ${THETA_MAX});
+    float ty = clamp(p.y / Ry + uLook.y, -${THETA_MAX}, ${THETA_MAX});
+    vec3 q = vec3(Rx * sin(tx), Ry * sin(ty),
+                  (Rx * (1.0 - cos(tx)) + Ry * (1.0 - cos(ty))) * ${Z_DAMP});
+    vec3 m = mix(vec3(p, 0.0), q, uCurve);
+    m.z -= 6.0;   // sit just behind the cards so they never z-fight
+    vShade = uCurve * (1.0 - cos(tx) * cos(ty));
+    gl_Position = projectionMatrix * viewMatrix * vec4(m.x, -m.y, m.z, 1.0);
+  }
+`;
+const BG_FRAG = /* glsl */`
+  uniform vec4 uGlowRect; uniform sampler2D uGlowTex; uniform float uGlowAmt;
+  varying vec2 vWorld; varying float vShade;
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+  void main(){
+    // hairlines at cell boundaries. Earlier this measured distance-to-line by
+    // pre-computing a world-px -> screen-px scale factor in the vertex shader
+    // and interpolating it — but that scale factor is itself a nonlinear
+    // function of position (cos/perspective), so interpolating it across a
+    // triangle is only an approximation, and the error oscillates with the
+    // mesh's own triangle grid — visible as dashing right where it crosses the
+    // hover backdrop's hard edge. fwidth() instead reads the GPU's actual
+    // per-pixel screen-space derivative at this exact fragment: always exact,
+    // never interpolated, so the line comes out a clean, constant width with
+    // no dependence on tessellation at all.
+    vec2 cell = vWorld / vec2(${CELL_W}.0, ${CELL_H}.0);
+    vec2 f = abs(fract(cell) - 0.5) - 0.5;      // signed dist to nearest edge, in cell units
+    vec2 cw = max(fwidth(cell), 1e-6);
+    float lineX = 1.0 - smoothstep(0.0, cw.x * 1.5, -f.x);
+    float lineY = 1.0 - smoothstep(0.0, cw.y * 1.5, -f.y);
+    float line = max(lineX, lineY);
+    // brighter (0.12 -> 0.24) per request — width is controlled separately
+    // above (cw.x * 1.5), untouched, so this only changes how visible the
+    // line is, not how thick it looks
+    float lineA = line * 0.24 * (1.0 - 0.5 * clamp(vShade, 0.0, 1.0));
+
+    // hover backdrop: 2-3 dominant colours sampled from the hovered card's OWN
+    // texture, blended through an organic gradient that's seeded per-cell (so
+    // it's stable, not re-randomised every frame) — fills the WHOLE grid cell
+    // right up to its boundary lines, same footprint as the grid lines
+    float glowA = 0.0;
+    vec3 blurCol = vec3(0.0);
+    vec2 gp = (vWorld - uGlowRect.xy) / uGlowRect.zw;
+    // crisp edge (not feathered) but still fwidth()-anti-aliased, so it's a
+    // clean 1px transition instead of a hard step that can alias/dash
+    vec2 ew = max(fwidth(gp), 1e-6);
+    float edge = smoothstep(0.0, ew.x, gp.x) * smoothstep(0.0, ew.x, 1.0 - gp.x)
+               * smoothstep(0.0, ew.y, gp.y) * smoothstep(0.0, ew.y, 1.0 - gp.y);
+    if (uGlowAmt > 0.001 && edge > 0.001){
+      vec2 cardUV = vec2((gp.x * ${CELL_W}.0 - ${CARD_L}.0) / ${CARD_W}.0,
+                          1.0 - (gp.y * ${CELL_H}.0 - ${CARD_T}.0) / ${CARD_H}.0);
+      vec2 seed = floor(uGlowRect.xy * 0.1);
+      vec2 p1 = vec2(0.5) + 0.34 * vec2(cos(hash(seed + 1.0) * 6.2831853), sin(hash(seed + 1.0) * 6.2831853));
+      vec2 p2 = vec2(0.5) + 0.34 * vec2(cos(hash(seed + 2.0) * 6.2831853), sin(hash(seed + 2.0) * 6.2831853));
+      vec2 p3 = vec2(0.5) + 0.34 * vec2(cos(hash(seed + 3.0) * 6.2831853), sin(hash(seed + 3.0) * 6.2831853));
+      vec3 c1 = texture2D(uGlowTex, clamp(p1, 0.02, 0.98), 4.5).rgb;
+      vec3 c2 = texture2D(uGlowTex, clamp(p2, 0.02, 0.98), 4.5).rgb;
+      vec3 c3 = texture2D(uGlowTex, clamp(p3, 0.02, 0.98), 4.5).rgb;
+      float w1 = 1.0 / (dot(cardUV - p1, cardUV - p1) * 3.0 + 0.05);
+      float w2 = 1.0 / (dot(cardUV - p2, cardUV - p2) * 3.0 + 0.05);
+      float w3 = 1.0 / (dot(cardUV - p3, cardUV - p3) * 3.0 + 0.05);
+      float wsum = w1 + w2 + w3;
+      blurCol = (c1 * w1 + c2 * w2 + c3 * w3) / wsum;
+      glowA = uGlowAmt * edge * 0.92;
+    }
+    // composite as a proper "line OVER backdrop OVER transparent" stack —
+    // each layer independently anti-aliased and then combined with the
+    // standard over operator, rather than a plain weighted average by summed
+    // alpha (which isn't a real compositing operator at all: as lineA and glowA
+    // both vary near a shared edge, that weighting can wobble in a way that
+    // reads as a jagged seam right where the grid line crosses the hovered
+    // cell's boundary).
+    vec3 lineColor = vec3(0.55, 0.58, 0.62);
+    vec3 backdropColor = blurCol * 0.85;
+    float aTot = lineA + glowA * (1.0 - lineA);
+    if (aTot < 0.004) discard;
+    vec3 col = (lineColor * lineA + backdropColor * glowA * (1.0 - lineA)) / max(aTot, 1e-4);
+    gl_FragColor = vec4(col, aTot);
+  }
+`;
+const bgMesh = new THREE.Mesh(
+  // the grid line's own math (vWorld) is exact everywhere in the sense that it's
+  // linear in the mesh's local coordinates, so perspective-correct interpolation
+  // reconstructs it exactly regardless of tessellation — but it's built from
+  // `p/uZoom + uCam`, and uCam is a GPU (32-bit float) value that grows without
+  // bound the longer someone drags the "infinite" grid around. Add two large,
+  // nearly-equal 32-bit floats (p and uCam can both reach into the tens of
+  // thousands after an extended session) and the subtraction that recovers the
+  // small local remainder loses precision — invisible on the SHAPE of the dome
+  // (gl_Position never touches uCam at all here, only local mesh geometry) but
+  // very visible on the grid LINE's phase, since fract()+smoothstep() turns even
+  // a sub-pixel wobble in that remainder into a jagged step right at the line —
+  // exactly the "patahan" that kept surviving every tessellation/AA fix that
+  // targeted the dome surface instead of this. Fix: `uCamLocal` (recomputed in
+  // JS every frame, in full float64 precision, as camX/Y minus the nearest
+  // CELL-aligned point) keeps the value actually landing in the 32-bit uniform
+  // small and bounded — viewport-sized, not session-distance-sized — regardless
+  // of how far camX/camY themselves have drifted. `uGlowRect` gets the same
+  // origin subtracted in JS for the same reason, in frame().
+  // Also: this mesh is a single draw call covering the whole dome, so (unlike
+  // the ~50-70 simultaneously-visible cards) we can afford to make it very fine
+  // without a meaningful cost — kept at 480x320 for the surface-facet fix from
+  // an earlier round, independent of this one.
+  new THREE.PlaneGeometry(2, 2, 480, 320),
+  new THREE.ShaderMaterial({
+    uniforms: { uCamLocal: GU.uCamLocal, uZoom: U.uZoom, uCurve: U.uCurve, uVp: U.uVp, uAng: U.uAng, uLook: U.uLook,
+                uGlowRect: GU.uGlowRect, uGlowTex: GU.uGlowTex, uGlowAmt: GU.uGlowAmt },
+    vertexShader: BG_VERT, fragmentShader: BG_FRAG,
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  })
+);
+bgMesh.frustumCulled = false;
+bgMesh.renderOrder = -1;
+scene.add(bgMesh);
+
+/* ================= PLACEHOLDER TEXTURE (shared by every empty slot) ================= */
+const phCanvas = document.createElement('canvas');
+phCanvas.width = 768; phCanvas.height = 432;
+function drawPlaceholder(){
+  const g = phCanvas.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 270, 432);
+  grad.addColorStop(0, '#17171a'); grad.addColorStop(1, '#0d0d0f');
+  g.fillStyle = grad; g.fillRect(0, 0, 768, 432);
+  g.strokeStyle = 'rgba(255,255,255,0.035)'; g.lineWidth = 2;
+  for (let x = -432; x < 768; x += 30){
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x + 432, 432); g.stroke();
+  }
+  g.textAlign = 'center';
+  g.fillStyle = '#3f444a';
+  g.font = '700 116px "Space Grotesk", sans-serif';
+  g.fillText('W', 384, 236);
+  g.fillStyle = '#565c62';
+  g.font = '400 19px "Space Mono", monospace';
+  g.fillText('A W A I T I N G   W O R K', 384, 300);
+}
+drawPlaceholder();
+const placeholderTex = new THREE.CanvasTexture(phCanvas);
+placeholderTex.anisotropy = maxAniso;
+GU.uGlowTex.value = placeholderTex;   // default before anything is hovered
+
+/* ================= TEXTURE CACHES (LRU) ================= */
+const texCache   = new Map();  // slot -> {tex}   artwork
+const labelCache = new Map();  // slot -> {tex}   meta text sheet
+
+// the REAL slot whose artwork should be shown for `slot` — itself if it has its
+// own upload, otherwise whatever slot it's set to visually mirror (see
+// duplicateOf above), otherwise itself again (slotTexture then falls through to
+// the plain placeholder since urls[slot] is empty either way)
+function resolveSlot(slot){
+  if (urls[slot]) return slot;
+  const d = duplicateOf[slot];
+  return (d != null && urls[d]) ? d : slot;
+}
+
+function lruEvict(cache, resolve){
+  if (cache.size <= TEX_MAX) return;
+  const inUse = new Set();
+  for (const cell of cells.values()) inUse.add(resolve ? resolve(cell.slot) : cell.slot);
+  for (const [slot, e] of cache){
+    if (cache.size <= TEX_MAX) break;
+    if (inUse.has(slot)) continue;
+    cache.delete(slot);
+    if (e.tex) e.tex.dispose();
+  }
+}
+
+function slotTexture(slot){
+  const src = resolveSlot(slot);
+  if (!urls[src]) return placeholderTex;
+  let e = texCache.get(src);
+  if (e){
+    texCache.delete(src); texCache.set(src, e);  // LRU touch
+    return e.tex || placeholderTex;
+  }
+  e = { tex: null };
+  texCache.set(src, e);
+  const img = new Image();
+  // now a remote (Supabase Storage) URL, not a same-origin blob: URL — without
+  // this, drawing it to the canvas below taints it, and WebGL refuses to
+  // upload a tainted canvas as a texture (SecurityError). Supabase's public
+  // bucket URLs send CORS headers that make anonymous cross-origin loads work.
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    if (texCache.get(src) !== e) return;          // invalidated while loading
+    const cv = document.createElement('canvas');
+    cv.width = TEX_W; cv.height = TEX_H;
+    const g = cv.getContext('2d');
+    const s = Math.max(TEX_W / img.width, TEX_H / img.height);   // cover crop
+    g.drawImage(img, (TEX_W - img.width * s) / 2, (TEX_H - img.height * s) / 2,
+                img.width * s, img.height * s);
+    const t = new THREE.CanvasTexture(cv);
+    t.anisotropy = maxAniso;
+    e.tex = t;
+    // updates every cell showing this image, including any slots duplicating it
+    for (const cell of cells.values())
+      if (resolveSlot(cell.slot) === src) cell.mat.uniforms.uMap.value = t;
+    lruEvict(texCache, resolveSlot);
+  };
+  img.onerror = () => { if (texCache.get(src) === e) texCache.delete(src); };
+  img.src = urls[src];
+  return placeholderTex;
+}
+
+/* the meta text sheet texture: head row, foot row and the hover caption, drawn
+   at ${'`'}LT_S${'`'}x supersampling so the GPU-bent text still reads crisply */
+function labelTexFor(slot){
+  let e = labelCache.get(slot);
+  if (e){
+    labelCache.delete(slot); labelCache.set(slot, e);   // LRU touch
+    return e.tex;
+  }
+  const s = effectiveSpec(slot);
+  const cv = document.createElement('canvas');
+  cv.width = CELL_W * LT_S; cv.height = CELL_H * LT_S;
+  const g = cv.getContext('2d');
+  g.scale(LT_S, LT_S);
+  const Lx = CARD_L, Rx = CARD_L + CARD_W, Ty = CARD_T, By = CARD_T + CARD_H;
+  try { g.letterSpacing = '0.8px'; } catch (_){}
+  // head row (above the card)
+  g.font = '700 10.5px "Space Mono", monospace';
+  g.fillStyle = '#c9cccd';
+  g.textAlign = 'left';
+  g.fillText(cardCode(slot), Lx, Ty - 12);
+  g.font = '10.5px "Space Mono", monospace';
+  g.fillStyle = '#8b9094';
+  g.textAlign = 'right';
+  g.fillText(s.title.toUpperCase(), Rx, Ty - 12);
+  // foot row (below the card): tag chips + year
+  g.textAlign = 'left';
+  g.font = '9.5px "Space Mono", monospace';
+  let x = Lx;
+  const cy = By + 11;
+  for (const tag of s.tags){
+    const t = tag.toUpperCase();
+    const w = g.measureText(t).width + 14;
+    g.fillStyle = 'rgba(20,22,24,0.6)';
+    g.strokeStyle = '#2e3134';
+    g.beginPath();
+    if (g.roundRect) g.roundRect(x, cy, w, 17, 3); else g.rect(x, cy, w, 17);
+    g.fill(); g.stroke();
+    g.fillStyle = '#9ba0a4';
+    g.fillText(t, x + 7, cy + 12);
+    x += w + 5;
+  }
+  g.font = '10.5px "Space Mono", monospace';
+  g.fillStyle = '#8b9094';
+  g.textAlign = 'right';
+  g.fillText(String(s.year), Rx, cy + 12);
+  // no filename/overlay is drawn over the artwork itself — just the head/foot meta
+  const tex = new THREE.CanvasTexture(cv);
+  tex.anisotropy = maxAniso;
+  labelCache.set(slot, { tex });
+  lruEvict(labelCache);
+  return tex;
+}
+
+function dropSlotTextures(slot){
+  const a = texCache.get(slot);
+  if (a){ texCache.delete(slot); if (a.tex) a.tex.dispose(); }
+  const l = labelCache.get(slot);
+  if (l){ labelCache.delete(slot); if (l.tex) l.tex.dispose(); }
+}
+
+// once the real webfonts arrive, redraw everything that baked text into a texture
+document.fonts.ready.then(() => {
+  drawPlaceholder();
+  placeholderTex.needsUpdate = true;
+  for (const [, e] of labelCache) if (e.tex) e.tex.dispose();
+  labelCache.clear();
+  for (const cell of cells.values())
+    if (cell.slot >= 0) cell.lmat.uniforms.uMap.value = labelTexFor(cell.slot);
+});
+
+/* ================= CELLS (pooled card mesh + GPU-bent text sheet) ================= */
+function makeCellEntry(){
+  const cellPos = { value: new THREE.Vector2() };   // shared by card + label sheet
+  const hoverU  = { value: 0 };
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uCam: U.uCam, uZoom: U.uZoom, uCurve: U.uCurve, uVp: U.uVp, uAng: U.uAng, uLook: U.uLook,
+                uCellPos: cellPos, uMap: { value: placeholderTex }, uHover: hoverU },
+    vertexShader: domeVert(0), fragmentShader: CARD_FRAG,
+    // at extreme curvature a card's own tessellation can briefly fold on itself
+    // right at the clamp boundary; DoubleSide keeps those triangles visible
+    // instead of letting default backface culling punch black holes in the mesh
+    side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(cardGeo, mat);
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+
+  const lmat = new THREE.ShaderMaterial({
+    uniforms: { uCam: U.uCam, uZoom: U.uZoom, uCurve: U.uCurve, uVp: U.uVp, uAng: U.uAng, uLook: U.uLook,
+                uCellPos: cellPos, uMap: { value: placeholderTex } },
+    vertexShader: domeVert(3), fragmentShader: LABEL_FRAG,
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const lmesh = new THREE.Mesh(labelGeo, lmat);
+  lmesh.frustumCulled = false;
+  lmesh.renderOrder = 1;
+  scene.add(lmesh);
+
+  return { mesh, mat, lmesh, lmat, cellPos, hoverU,
+           slot: -1, wx: 0, wy: 0, hover: 0, filled: false };
+}
+
+function setCellSlot(entry, slot){
+  entry.slot = slot;
+  entry.mat.uniforms.uMap.value  = slotTexture(slot);
+  entry.lmat.uniforms.uMap.value = labelTexFor(slot);
+  entry.filled = !!urls[slot];
+}
+
+function recycle(entry){
+  entry.slot = -1;
+  entry.mesh.visible = false;
+  entry.lmesh.visible = false;
+  entry.hover = 0;
+  entry.hoverU.value = 0;
+  pool.push(entry);
+}
+
+function refreshSlotEverywhere(slot){
+  dropSlotTextures(slot);
+  for (const entry of cells.values()){
+    if (entry.slot === slot){
+      entry.mat.uniforms.uMap.value  = slotTexture(slot);
+      entry.lmat.uniforms.uMap.value = labelTexFor(slot);
+      entry.filled = !!urls[slot];
+    }
+  }
+  renderSlotGridItem(slot);
+  updateSlotCount();
+}
+
+/* ================= DOME MATH (JS mirror of the vertex shader, for hit-testing) ================= */
+function warp(px, py){
+  const Rx = (vw / 2) / ANG_X, Ry = (vh / 2) / ANG_Y;
+  const tx = clamp(px / Rx + lookX, -THETA_MAX, THETA_MAX);
+  const ty = clamp(py / Ry + lookY, -THETA_MAX, THETA_MAX);
+  const qx = Rx * Math.sin(tx), qy = Ry * Math.sin(ty);
+  const qz = (Rx * (1 - Math.cos(tx)) + Ry * (1 - Math.cos(ty))) * Z_DAMP;
+  const x = px + (qx - px) * curveAmt;
+  const y = py + (qy - py) * curveAmt;
+  const z = qz * curveAmt;
+  const s = PERSP / (PERSP - z);   // perspective magnification toward the viewer
+  return { sx: x * s, sy: y * s, s, tx, ty };
+}
+
+// how far (world px) from the camera center a card can be and still land on screen —
+// marched numerically because the dome compresses x but perspective magnifies it back
+function axisExtent(halfVp, ang, cellSpan){
+  const R = halfVp / ang;
+  const bound = halfVp + MARGIN;
+  for (let p = 0; p < 9000; p += 32){
+    const t = Math.min(p / R, THETA_MAX);
+    const q = R * Math.sin(t);
+    const z = R * (1 - Math.cos(t)) * Z_DAMP * curveAmt;
+    const x = (p + (q - p) * curveAmt) * (PERSP / (PERSP - z));
+    if (x > bound) return p / zoom;
+    if (t >= THETA_MAX - 1e-4) return (p + cellSpan) / zoom;  // past the rim: cull the rest
+  }
+  return 9000 / zoom;
+}
+
+/* ================= RENDER LOOP ================= */
+const needed = new Set();
+function frame(){
+  if (!dragging){
+    vx *= FRICTION; vy *= FRICTION;
+    if (Math.abs(vx) < 0.02) vx = 0;
+    if (Math.abs(vy) < 0.02) vy = 0;
+    camX += vx; camY += vy;
+  }
+  zoom     += (targetZoom  - zoom)     * (reduceMotion ? 1 : 0.085);
+  curveAmt += (targetCurve - curveAmt) * (reduceMotion ? 1 : 0.1);
+
+  // mouse-look parallax: ease the tilt toward the cursor's offset from screen
+  // center (skip entirely under reduced-motion). Deliberately NOT gated by
+  // panelOpen — About/Careers are just translucent panels over the still-live
+  // gallery, tilt should keep following the mouse there too. While the cursor
+  // is outside the browser window entirely, ease back to centered (0,0), but
+  // MUCH slower than the normal chase — a quick snap back read as jarring.
+  if (reduceMotion){
+    lookX = lookY = 0;
+  } else {
+    const targetX = mouseInWindow ? clamp((tiltX - vw / 2) / (vw / 2), -1, 1) * LOOK_MAX : 0;
+    const targetY = mouseInWindow ? clamp((tiltY - vh / 2) / (vh / 2), -1, 1) * LOOK_MAX : 0;
+    const ease = mouseInWindow ? LOOK_EASE : LOOK_EASE_RETURN;
+    lookX += (targetX - lookX) * ease;
+    lookY += (targetY - lookY) * ease;
+  }
+
+  U.uCam.value.set(camX, camY);
+  U.uZoom.value  = zoom;
+  U.uCurve.value = curveAmt;
+  U.uLook.value.set(lookX, lookY);
+  // floating origin for the grid-line sheet only (see bgMesh's definition) —
+  // computed in JS float64, so it's always exact regardless of how far camX/Y
+  // have drifted; only the small remainder actually reaches the 32-bit GPU side.
+  const camOX = Math.floor(camX / CELL_W) * CELL_W;
+  const camOY = Math.floor(camY / CELL_H) * CELL_H;
+  GU.uCamLocal.value.set(camX - camOX, camY - camOY);
+
+  const hx = axisExtent(vw / 2, ANG_X, CELL_W);
+  const hy = axisExtent(vh / 2, ANG_Y, CELL_H);
+  const c0 = Math.floor((camX - hx) / CELL_W), c1 = Math.ceil((camX + hx) / CELL_W);
+  const r0 = Math.floor((camY - hy) / CELL_H), r1 = Math.ceil((camY + hy) / CELL_H);
+
+  needed.clear();
+  for (let c = c0; c <= c1; c++){
+    for (let r = r0; r <= r1; r++){
+      const key = c + '_' + r;
+      needed.add(key);
+      if (!cells.has(key)){
+        const entry = pool.pop() || makeCellEntry();
+        cells.set(key, entry);
+        entry.mesh.visible = true;
+        entry.lmesh.visible = true;
+        entry.wx = c * CELL_W; entry.wy = r * CELL_H;
+        entry.cellPos.value.set(entry.wx + CELL_W / 2, entry.wy + CELL_H / 2);
+        setCellSlot(entry, mod(r, ROWS) * COLS + mod(c, COLS));
+      }
+    }
+  }
+  for (const [key, entry] of cells){
+    if (!needed.has(key)){ cells.delete(key); recycle(entry); }
+  }
+
+  // hover: hit-test the mouse against each card's projected box (several boxes can
+  // overlap near the rim — the closest one wins); pure math, no DOM
+  let hoverEntry = null, hoverDist = 1e9;
+  hoverDebug = null;
+  for (const entry of cells.values()){
+    const px = (entry.wx + CELL_W / 2 - camX) * zoom;
+    const py = (entry.wy + CELL_H / 2 - camY) * zoom;
+    const w = warp(px, py);
+    const cssX = vw / 2 + w.sx, cssY = vh / 2 + w.sy;
+    // hit-test the whole CELL (not just the card) so the hover backdrop — which
+    // visually fills the cell up to the grid lines — activates as soon as the
+    // mouse crosses into that grid box, not only over the card's own pixels.
+    // Derive the box from the actual warped screen positions of the cell's four
+    // CORNERS (not edge midpoints, and not a cos(tx) approximation) — near the
+    // rim in curved mode the z-push (qz) depends on tx AND ty together, so a
+    // corner where both are extreme gets pushed further toward the camera (and
+    // magnified more by the perspective divide) than either edge midpoint alone.
+    // Kept PER-DIRECTION (left/right/top/bottom), not a single symmetric max:
+    // a rim cell's near-center side sits much closer to its own center on screen
+    // than its far/rim side does, so forcing one shared half-width would either
+    // undershoot the far corner or (worse) overshoot the near side straight into
+    // the neighboring cell's territory — which is exactly what happened when a
+    // symmetric max-based box was tried. This matches the real grid lines
+    // exactly in flat mode too (there tx/ty carry no foreshortening at all, so
+    // all four corners — and both directions — agree).
+    const halfW = CELL_W / 2 * zoom, halfH = CELL_H / 2 * zoom;
+    const wTL = warp(px - halfW, py - halfH), wTR = warp(px + halfW, py - halfH);
+    const wBL = warp(px - halfW, py + halfH), wBR = warp(px + halfW, py + halfH);
+    const hitL = Math.max(w.sx - wTL.sx, w.sx - wBL.sx, 4);
+    const hitR = Math.max(wTR.sx - w.sx, wBR.sx - w.sx, 4);
+    const hitT = Math.max(w.sy - wTL.sy, w.sy - wTR.sy, 4);
+    const hitB = Math.max(wBL.sy - w.sy, wBR.sy - w.sy, 4);
+    const dx = mouseX - cssX, dy = mouseY - cssY;
+    const hitW = dx >= 0 ? hitR : hitL, hitH = dy >= 0 ? hitB : hitT;
+    // Tie-break by distance NORMALIZED to each cell's own on-screen footprint
+    // (fraction of its directional half-width/half-height), not raw pixels.
+    // Near the rim, cells are visually compressed — a raw-pixel distance would
+    // keep favoring whichever overlapping neighbor has the LARGER projected box
+    // (its center reads as "closer" in absolute px even when the mouse is
+    // genuinely inside the smaller, more compressed cell instead), so the mouse
+    // had to travel deep into a rim cell before it could ever win against its
+    // bigger neighbor.
+    const dd = Math.hypot(dx, dy);
+    const ndd = Math.hypot(dx / hitW, dy / hitH);
+    if (!dragging && !panelOpen && ndd < hoverDist &&
+        Math.abs(dx) < hitW && Math.abs(dy) < hitH){
+      hoverEntry = entry; hoverDist = ndd;
+    }
+    if (!hoverDebug || dd < hoverDebug.dist)
+      hoverDebug = { dist: Math.round(dd), slot: entry.slot,
+                     cssX: Math.round(cssX), cssY: Math.round(cssY),
+                     hw: Math.round(hitW), hh: Math.round(hitH) };
+  }
+  for (const entry of cells.values()){
+    const target = entry === hoverEntry ? 1 : 0;
+    entry.hover += (target - entry.hover) * 0.18;
+    entry.hoverU.value = entry.hover;
+  }
+
+  // hover backdrop: a heavily blurred sample of the hovered card's OWN texture
+  // (whatever it currently shows — real artwork or the placeholder), washed
+  // behind the card and filling its whole grid cell (background sheet's shader)
+  if (hoverEntry){
+    // same camOX/camOY origin subtracted here as uCamLocal above, so this stays
+    // in the same small, precise coordinate space as vWorld in BG_FRAG
+    GU.uGlowRect.value.set(hoverEntry.wx - camOX, hoverEntry.wy - camOY, CELL_W, CELL_H);
+    GU.uGlowTex.value = hoverEntry.mat.uniforms.uMap.value;
+    glowOp += (hoverEntry.hover - glowOp) * 0.2;
+  } else {
+    glowOp *= 0.88;
+    if (glowOp < 0.004) glowOp = 0;
+  }
+  GU.uGlowAmt.value = glowOp;
+
+  if (sceneRT){
+    renderer.setRenderTarget(sceneRT);
+    renderer.render(scene, camera);
+
+    blurMatH.uniforms.uTex.value = sceneRT.texture;
+    ppPass(blurMatH, blurRT1);
+    blurMatV.uniforms.uTex.value = blurRT1.texture;
+    ppPass(blurMatV, blurRT2);
+
+    edgeMat.uniforms.uSharp.value = sceneRT.texture;
+    edgeMat.uniforms.uGlow.value  = blurRT2.texture;
+    ppPass(edgeMat, null);
+  } else {
+    renderer.render(scene, camera);
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ================= DRAG / WHEEL / KEYS ================= */
+const logoEl = document.getElementById('logo');
+let px = 0, py = 0;
+stage.addEventListener('pointerdown', e => {
+  if (panelOpen) return;
+  dragging = true;
+  stage.classList.add('dragging');
+  logoEl.classList.add('dragging');
+  try { stage.setPointerCapture(e.pointerId); } catch (_) { /* pointer gone mid-event */ }
+  px = e.clientX; py = e.clientY;
+  vx = vy = 0;
+  if (!reduceMotion) targetZoom = baseZoom() * 0.8;
+  document.getElementById('hint').classList.add('gone');
+});
+stage.addEventListener('pointermove', e => {
+  mouseX = e.clientX; mouseY = e.clientY;
+  if (!dragging) return;
+  const dx = e.clientX - px, dy = e.clientY - py;
+  px = e.clientX; py = e.clientY;
+  camX -= dx / zoom; camY -= dy / zoom;
+  vx = vx * 0.4 + (-dx / zoom) * 0.6;
+  vy = vy * 0.4 + (-dy / zoom) * 0.6;
+});
+stage.addEventListener('pointerleave', () => { mouseX = mouseY = -1e4; });
+
+/* mouse-look tilt input: tracked at document level (not #stage) so it keeps
+   following the cursor over the header, buttons, and the About/Careers panels;
+   mouseenter/mouseleave on `document` reliably fire when the cursor crosses the
+   browser viewport's edge (i.e. leaves the app entirely), which is the actual
+   signal we want for easing the tilt back to centered. */
+document.addEventListener('pointermove', e => { tiltX = e.clientX; tiltY = e.clientY; mouseInWindow = true; });
+document.addEventListener('mouseenter', () => { mouseInWindow = true; });
+document.addEventListener('mouseleave', () => { mouseInWindow = false; });
+
+const endDrag = () => {
+  if (!dragging) return;
+  dragging = false;
+  stage.classList.remove('dragging');
+  logoEl.classList.remove('dragging');
+  targetZoom = baseZoom();
+  if (reduceMotion) vx = vy = 0;
+};
+stage.addEventListener('pointerup', endDrag);
+stage.addEventListener('pointercancel', endDrag);
+
+stage.addEventListener('wheel', e => {
+  if (panelOpen) return;
+  e.preventDefault();
+  camX += e.deltaX * 0.9 / zoom;
+  camY += e.deltaY * 0.9 / zoom;
+  document.getElementById('hint').classList.add('gone');
+}, { passive: false });
+
+addEventListener('keydown', e => {
+  if (panelOpen) return;
+  const step = 140 / zoom;
+  if (e.key === 'ArrowLeft')  camX -= step;
+  if (e.key === 'ArrowRight') camX += step;
+  if (e.key === 'ArrowUp')    camY -= step;
+  if (e.key === 'ArrowDown')  camY += step;
+});
+
+addEventListener('resize', () => {
+  fitViewport();
+  if (!dragging) targetZoom = baseZoom();
+});
+
+/* ================= TABS ================= */
+const tabBtns  = document.querySelectorAll('#tabs button');
+const tabThumb = document.querySelector('#tabs .tab-thumb');
+function moveTabThumb(btn){
+  tabThumb.style.width     = btn.offsetWidth + 'px';
+  tabThumb.style.transform = 'translateX(' + btn.offsetLeft + 'px)';
+}
+function setTab(name){
+  tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  moveTabThumb([...tabBtns].find(b => b.dataset.tab === name));
+  document.getElementById('panel-about').classList.toggle('open', name === 'about');
+  document.getElementById('panel-careers').classList.toggle('open', name === 'careers');
+  panelOpen = name !== 'work';
+  stage.classList.toggle('dimmed', panelOpen);
+}
+tabBtns.forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+// initial placement shouldn't play the bounce — only user-triggered switches should
+tabThumb.style.transition = 'none';
+moveTabThumb(document.querySelector('#tabs button.active'));
+requestAnimationFrame(() => { tabThumb.style.transition = ''; });
+addEventListener('resize', () => moveTabThumb(document.querySelector('#tabs button.active')));
+
+/* ================= VIEW TOGGLE ================= */
+const viewToggle = document.getElementById('viewToggle');
+const btnCurved = document.getElementById('btnCurved');
+const btnFlat   = document.getElementById('btnFlat');
+btnCurved.addEventListener('click', () => {
+  targetCurve = 1;
+  btnCurved.classList.add('active'); btnFlat.classList.remove('active');
+  viewToggle.classList.remove('flat');
+});
+btnFlat.addEventListener('click', () => {
+  targetCurve = 0;
+  btnFlat.classList.add('active'); btnCurved.classList.remove('active');
+  viewToggle.classList.add('flat');
+});
+
+/* ================= CLOCKS ================= */
+const clockPml   = document.getElementById('clockPml');
+const clockLocal = document.getElementById('clockLocal');
+function tickClock(){
+  const now = new Date();
+  clockPml.textContent = new Intl.DateTimeFormat('en-GB',
+    { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' }).format(now);
+  clockLocal.textContent = new Intl.DateTimeFormat('en-GB',
+    { hour: '2-digit', minute: '2-digit' }).format(now);
+}
+tickClock();
+setInterval(tickClock, 15000);
+
+/* ================= TOAST ================= */
+const toast = document.getElementById('toast');
+let toastTimer = null;
+function showToast(msg){
+  toast.textContent = msg;
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+}
+
+/* ================= BACKEND — Supabase (public read, admin-only write) =================
+   One table, `works` (keyed by `slot`, same index used everywhere else in this
+   file), replaces the four old IndexedDB stores — a slot's image, text
+   override, pin flag and duplicate-source are now just columns on one sparse
+   row instead of four separate local stores. Function names/call sites below
+   are kept as close as possible to the old dbPut/dbDel/dbMetaPut/... so the
+   rest of the file (addFiles, removeSlot, editSave, togglePin,
+   assignDuplicatesForNewSlots, boot) barely has to change — this is a
+   persistence-layer swap, not a UI rewrite. Access control lives entirely in
+   Postgres row-level security (anon can SELECT; INSERT/UPDATE/DELETE need an
+   authenticated session) — nothing in this file enforces it.
+
+   dbAll/dbMetaAll/dbPinAll/dbDupAll are gone — boot now does ONE
+   `supabase.from('works').select('*')` instead of four separate reads. */
+
+// image upload: replace the slot's file in storage, upsert its DB row, return
+// the new public URL. Cleans up the previous file if this slot already had one.
+async function dbPut({ slot, blob, name }){
+  const { data: existing } = await supabase.from('works').select('file_path').eq('slot', slot).maybeSingle();
+  const ext = ((blob.type || '').split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+  const path = `${slot}-${Date.now()}.${ext}`;
+  const { error: upErr } = await supabase.storage.from(WORKS_BUCKET).upload(path, blob, { contentType: blob.type });
+  if (upErr) throw upErr;
+  const { error } = await supabase.from('works')
+    .upsert({ slot, file_path: path, original_name: name || null, media_type: 'image' });
+  if (error) throw error;
+  if (existing && existing.file_path && existing.file_path !== path){
+    supabase.storage.from(WORKS_BUCKET).remove([existing.file_path]).catch(() => {});
+  }
+  return supabase.storage.from(WORKS_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+// image removal only — clears the file/name columns, leaves any title/tag/
+// year override, pin, or duplicate-of on that row untouched (same scope the
+// old IndexedDB 'works' store delete had, separate from 'meta'/'pins'/'dups')
+async function dbDel(slot){
+  const { data: existing } = await supabase.from('works').select('file_path').eq('slot', slot).maybeSingle();
+  if (existing && existing.file_path) await supabase.storage.from(WORKS_BUCKET).remove([existing.file_path]);
+  const { error } = await supabase.from('works')
+    .update({ file_path: null, original_name: null, media_type: 'image' }).eq('slot', slot);
+  if (error) throw error;
+}
+// wipes every row + every stored file — used by "Hapus semua" (used to be 4
+// separate store clears, now it's just the one table)
+async function dbClear(){
+  const { data: rows } = await supabase.from('works').select('file_path, before_file_path');
+  const paths = (rows || []).flatMap(r => [r.file_path, r.before_file_path]).filter(Boolean);
+  if (paths.length) await supabase.storage.from(WORKS_BUCKET).remove(paths);
+  const { error } = await supabase.from('works').delete().gte('slot', 0);
+  if (error) throw error;
+}
+const dbMetaPut = ({ slot, title, tags, year }) =>
+  supabase.from('works').upsert({ slot, title, tags, year }).then(({ error }) => { if (error) throw error; });
+const dbMetaDel = slot =>
+  supabase.from('works').update({ title: null, tags: null, year: null }).eq('slot', slot)
+    .then(({ error }) => { if (error) throw error; });
+const dbPinPut = slot =>
+  supabase.from('works').upsert({ slot, pinned: true }).then(({ error }) => { if (error) throw error; });
+const dbPinDel = slot =>
+  supabase.from('works').update({ pinned: false }).eq('slot', slot).then(({ error }) => { if (error) throw error; });
+const dbDupPut = ({ slot, source }) =>
+  supabase.from('works').upsert({ slot, duplicate_of: source }).then(({ error }) => { if (error) throw error; });
+const dbDupDel = slot =>
+  supabase.from('works').update({ duplicate_of: null }).eq('slot', slot).then(({ error }) => { if (error) throw error; });
+// "before" (pre-edit) reference image — same bucket as the main artwork, kept
+// under a `-before-` path so the two files never collide
+async function dbBeforePut({ slot, blob }){
+  const { data: existing } = await supabase.from('works').select('before_file_path').eq('slot', slot).maybeSingle();
+  const ext = ((blob.type || '').split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+  const path = `${slot}-before-${Date.now()}.${ext}`;
+  const { error: upErr } = await supabase.storage.from(WORKS_BUCKET).upload(path, blob, { contentType: blob.type });
+  if (upErr) throw upErr;
+  const { error } = await supabase.from('works').upsert({ slot, before_file_path: path });
+  if (error) throw error;
+  if (existing && existing.before_file_path && existing.before_file_path !== path){
+    supabase.storage.from(WORKS_BUCKET).remove([existing.before_file_path]).catch(() => {});
+  }
+  return supabase.storage.from(WORKS_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+async function dbBeforeDel(slot){
+  const { data: existing } = await supabase.from('works').select('before_file_path').eq('slot', slot).maybeSingle();
+  if (existing && existing.before_file_path) await supabase.storage.from(WORKS_BUCKET).remove([existing.before_file_path]);
+  const { error } = await supabase.from('works').update({ before_file_path: null }).eq('slot', slot);
+  if (error) throw error;
+}
+
+/* ================= UPLOAD LOGIC ================= */
+// return every rendered cell to the pool so the grid re-renders
+// (needed whenever ROWS changes: the slot mapping shifts)
+function flushCells(){
+  for (const entry of cells.values()) recycle(entry);
+  cells.clear();
+}
+
+// grow the unique block to hold at least n slots (whole rows of COLS)
+function ensureSlots(n){
+  const target = Math.max(SLOTS, Math.ceil(n / COLS) * COLS);
+  if (target === SLOTS) return;
+  while (SLOTS < target){
+    urls.push(null); names.push(null); beforeUrls.push(null); metaOverrides.push(null); duplicateOf.push(null);
+    makeSlotItem(SLOTS);
+    SLOTS++;
+  }
+  ROWS = SLOTS / COLS;
+  flushCells();
+  updateSlotCount();
+}
+
+function applyWork(slot, publicUrl, name){
+  urls[slot]  = publicUrl;
+  names[slot] = name || null;
+  if (duplicateOf[slot] != null){   // a real upload always wins over a borrowed image
+    duplicateOf[slot] = null;
+    dbDupDel(slot).catch(() => {});
+  }
+  refreshSlotEverywhere(slot);
+}
+
+// Fisher-Yates
+function shuffle(arr){
+  for (let i = arr.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// pick `count` real (uploaded) slots to borrow images from, centered on `half`
+// — the halfway point of the grid at the moment these slots were created, far
+// enough from a freshly grown row that the repeat doesn't read as an obvious
+// duplicate. Widens outward from `half` if that neighbourhood doesn't have
+// enough real uploads yet (early in a gallery's life).
+function pickDuplicateSources(count, half){
+  const picked = [];
+  const seen = new Set();
+  const consider = i => {
+    if (picked.length >= count || i < 0 || i >= SLOTS || seen.has(i) || !urls[i]) return;
+    seen.add(i); picked.push(i);
+  };
+  for (let i = half - count + 1; i <= half; i++) consider(i);
+  for (let d = 1; picked.length < count && d < SLOTS; d++){
+    consider(half + d);
+    consider(half - count + 1 - d);
+  }
+  return picked;
+}
+
+// after growth adds a new block of slots (one real upload plus several filler
+// slots in the same row), give the filler slots a borrowed image instead of
+// the bare "AWAITING WORK" placeholder — see the comment on `duplicateOf`.
+async function assignDuplicatesForNewSlots(oldSlotCount, newSlotCount){
+  const emptyTargets = [];
+  for (let i = oldSlotCount; i < newSlotCount; i++) if (!urls[i]) emptyTargets.push(i);
+  if (!emptyTargets.length) return;
+  const half = Math.floor(newSlotCount / 2);
+  const sources = shuffle(pickDuplicateSources(emptyTargets.length, half));
+  for (let i = 0; i < emptyTargets.length && i < sources.length; i++){
+    const slot = emptyTargets[i], source = sources[i];
+    duplicateOf[slot] = source;
+    try { await dbDupPut({ slot, source }); } catch (e){ console.error(e); }
+    refreshSlotEverywhere(slot);
+  }
+}
+
+async function addFiles(fileList, targetSlot = null){
+  const files = [...fileList].filter(f => f.type.startsWith('image/'));
+  if (!files.length){ showToast('Tidak ada file gambar yang valid'); return 0; }
+  const slotsBefore = SLOTS;
+  let placed = 0;
+  for (const f of files){
+    let slot = targetSlot;
+    if (slot === null){
+      slot = urls.findIndex(u => u === null);
+      if (slot === -1){ slot = SLOTS; ensureSlots(SLOTS + 1); }  // grid grows a row
+    }
+    try {
+      const publicUrl = await dbPut({ slot, blob: f, name: f.name });
+      applyWork(slot, publicUrl, f.name);
+      placed++;
+    } catch (err){
+      console.error('Supabase upload failed', err);
+      showToast('Gagal menyimpan — cek koneksi atau login kamu');
+      break;
+    }
+    targetSlot = null; // only the first file goes to the requested slot
+  }
+  if (SLOTS > slotsBefore) await assignDuplicatesForNewSlots(slotsBefore, SLOTS);
+  if (placed) showToast(placed + ' karya terpasang ke grid');
+  return placed;
+}
+
+async function removeSlot(slot){
+  try { await dbDel(slot); } catch (e){ console.error(e); }
+  urls[slot] = null; names[slot] = null;
+  if (beforeUrls[slot]){   // a "before" reference is meaningless without the main design it's paired with
+    beforeUrls[slot] = null;
+    try { await dbBeforeDel(slot); } catch (e){ console.error(e); }
+  }
+  if (duplicateOf[slot] != null){   // clicking "hapus" on a borrowed-image slot should blank it, not leave the borrow
+    duplicateOf[slot] = null;
+    try { await dbDupDel(slot); } catch (e){ console.error(e); }
+  }
+  const pinIdx = pinnedSlots.indexOf(slot);
+  if (pinIdx !== -1){
+    pinnedSlots.splice(pinIdx, 1);
+    try { await dbPinDel(slot); } catch (e){ console.error(e); }
+  }
+  refreshSlotEverywhere(slot);
+  // any slot borrowing THIS one's image (see duplicateOf) would otherwise be
+  // left pointing at a texture dropSlotTextures() just disposed — blank those
+  // back to the plain placeholder too instead of leaving a broken card
+  for (let i = 0; i < duplicateOf.length; i++){
+    if (duplicateOf[i] !== slot) continue;
+    duplicateOf[i] = null;
+    try { await dbDupDel(i); } catch (e){ console.error(e); }
+    refreshSlotEverywhere(i);
+  }
+}
+
+/* ================= UPLOAD MODAL UI ================= */
+const modal      = document.getElementById('uploadModal');
+const slotGrid   = document.getElementById('slotGrid');
+const fileMulti  = document.getElementById('fileMulti');
+const fileSingle = document.getElementById('fileSingle');
+const dropzone   = document.getElementById('dropzone');
+let pendingSlot  = null;
+
+function makeSlotItem(i){
+  const d = document.createElement('div');
+  d.className = 'slot-item';
+  d.dataset.slot = i;
+  d.innerHTML = '<span class="slot-n">' + String(i + 1).padStart(2, '0') + '</span>' +
+                '<button class="slot-edit" title="Edit teks">&#9998;</button>' +
+                '<button class="slot-x" title="Hapus">&#10005;</button>' +
+                '<button class="slot-pin" title="Pin — jadikan tampilan awal galeri">&#128204;</button>' +
+                '<button class="slot-before" title="Upload gambar before">&#9198;</button>';
+  d.addEventListener('click', e => {
+    if (e.target.closest('.slot-x')){ removeSlot(i); return; }
+    if (e.target.closest('.slot-edit')){ openEdit(i); return; }
+    if (e.target.closest('.slot-pin')){ togglePin(i); return; }
+    if (e.target.closest('.slot-before')){ openBeforeUpload(i); return; }
+    pendingSlot = i;
+    fileSingle.click();
+  });
+  slotGrid.appendChild(d);
+}
+
+async function togglePin(slot){
+  if (!urls[slot]) return;   // only real artwork can be featured on load
+  const idx = pinnedSlots.indexOf(slot);
+  try {
+    if (idx === -1){ await dbPinPut(slot); pinnedSlots.push(slot); showToast('Karya di-pin — bisa jadi tampilan awal galeri'); }
+    else { await dbPinDel(slot); pinnedSlots.splice(idx, 1); showToast('Pin dilepas'); }
+  } catch (e){ console.error('pin op failed', e); showToast('Gagal menyimpan pin'); return; }
+  renderSlotGridItem(slot);
+}
+
+// "before" (pre-edit) reference image, uploaded per slot next to the pin
+// button — only meaningful once that slot has its own real design (the
+// "after"), so it's blocked otherwise rather than uploading an orphan
+let pendingBeforeSlot = null;
+const fileBefore = document.getElementById('fileBefore');
+function openBeforeUpload(slot){
+  if (!urls[slot]){ showToast('Upload karya utama dulu sebelum menambah before'); return; }
+  pendingBeforeSlot = slot;
+  fileBefore.click();
+}
+async function addBeforeFile(file, slot){
+  if (!file.type.startsWith('image/')){ showToast('Tidak ada file gambar yang valid'); return; }
+  try {
+    beforeUrls[slot] = await dbBeforePut({ slot, blob: file });
+    showToast('Gambar before tersimpan');
+  } catch (err){
+    console.error('Supabase before-upload failed', err);
+    showToast('Gagal menyimpan — cek koneksi atau login kamu');
+    return;
+  }
+  renderSlotGridItem(slot);
+}
+fileBefore.addEventListener('change', () => {
+  if (fileBefore.files.length && pendingBeforeSlot !== null) addBeforeFile(fileBefore.files[0], pendingBeforeSlot);
+  pendingBeforeSlot = null; fileBefore.value = '';
+});
+
+/* ================= EDIT-TEXT MODAL ================= */
+const editModal  = document.getElementById('editModal');
+const editLabel  = document.getElementById('editSlotLabel');
+const editTitle  = document.getElementById('editTitle');
+const editTag1   = document.getElementById('editTag1');
+const editTag2   = document.getElementById('editTag2');
+const editYear   = document.getElementById('editYear');
+let editSlot = null;
+
+// Tag 1/2 are fixed picklists now (not free text) — populate the <select>s once
+for (const v of TAG1_OPTIONS) editTag1.add(new Option(v, v));
+for (const v of TAG2_OPTIONS) editTag2.add(new Option(v, v));
+
+function openEdit(slot){
+  editSlot = slot;
+  const eff = effectiveSpec(slot);
+  editLabel.textContent = 'SLOT ' + String(slot + 1).padStart(2, '0') + ' · ' + cardCode(slot);
+  editTitle.value = eff.title;
+  editTag1.value  = eff.tags[0];
+  editTag2.value  = eff.tags[1];
+  editYear.value  = eff.year;
+  editModal.classList.add('open');
+  editTitle.focus();
+}
+function closeEdit(){ editModal.classList.remove('open'); editSlot = null; }
+
+document.getElementById('closeEdit').addEventListener('click', closeEdit);
+editModal.querySelector('.backdrop').addEventListener('click', closeEdit);
+
+document.getElementById('editSave').addEventListener('click', async () => {
+  if (editSlot === null) return;
+  const slot = editSlot;
+  const title = editTitle.value.trim();
+  const yearN = parseInt(editYear.value, 10);
+  const override = {
+    slot,
+    title: title || null,
+    tags:  [editTag1.value, editTag2.value],
+    year:  Number.isFinite(yearN) ? yearN : null,
+  };
+  try {
+    await dbMetaPut(override);
+  } catch (e){
+    console.error('IndexedDB meta put failed', e);
+    showToast('Gagal menyimpan teks — penyimpanan browser bermasalah');
+    return;
+  }
+  metaOverrides[slot] = override;
+  refreshSlotEverywhere(slot);
+  showToast('Teks kartu disimpan');
+  closeEdit();
+});
+
+document.getElementById('editReset').addEventListener('click', async () => {
+  if (editSlot === null) return;
+  const slot = editSlot;
+  try { await dbMetaDel(slot); } catch (e){ console.error(e); }
+  metaOverrides[slot] = null;
+  refreshSlotEverywhere(slot);
+  const base = specFor(slot);
+  editTitle.value = base.title;
+  editTag1.value = base.tags[0]; editTag2.value = base.tags[1];
+  editYear.value = base.year;
+  showToast('Dikembalikan ke default');
+});
+
+function renderSlotGridItem(slot){
+  const d = slotGrid.children[slot];
+  if (!d) return;
+  d.classList.toggle('filled', !!urls[slot]);
+  d.classList.toggle('pinned', pinnedSlots.includes(slot));
+  d.classList.toggle('has-before', !!beforeUrls[slot]);
+  let img = d.querySelector('img');
+  if (urls[slot]){
+    if (!img){ img = document.createElement('img'); d.prepend(img); }
+    img.src = urls[slot];
+    d.title = names[slot] || '';
+  } else if (img){ img.remove(); d.title = ''; }
+}
+function updateSlotCount(){
+  const n = urls.filter(Boolean).length;
+  document.getElementById('slotCount').textContent = n + ' / ' + SLOTS + ' slot terisi';
+}
+
+document.getElementById('uploadBtn').addEventListener('click', () => modal.classList.add('open'));
+document.getElementById('closeModal').addEventListener('click', () => modal.classList.remove('open'));
+modal.querySelector('.backdrop').addEventListener('click', () => modal.classList.remove('open'));
+addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (editModal.classList.contains('open')){ closeEdit(); return; }
+  if (loginModal.classList.contains('open')){ closeLoginModal(); return; }
+  modal.classList.remove('open');
+});
+
+dropzone.addEventListener('click', () => fileMulti.click());
+fileMulti.addEventListener('change', () => { addFiles(fileMulti.files); fileMulti.value = ''; });
+fileSingle.addEventListener('change', () => {
+  if (fileSingle.files.length && pendingSlot !== null) addFiles(fileSingle.files, pendingSlot);
+  pendingSlot = null; fileSingle.value = '';
+});
+['dragenter','dragover'].forEach(ev => dropzone.addEventListener(ev, e => {
+  e.preventDefault(); dropzone.classList.add('over');
+}));
+['dragleave','drop'].forEach(ev => dropzone.addEventListener(ev, e => {
+  e.preventDefault(); dropzone.classList.remove('over');
+}));
+dropzone.addEventListener('drop', e => addFiles(e.dataTransfer.files));
+
+document.getElementById('clearAll').addEventListener('click', async () => {
+  if (!urls.some(Boolean) && !metaOverrides.some(Boolean) && !pinnedSlots.length) return;
+  if (!confirm('Hapus semua karya dari grid?')) return;
+  try { await dbClear(); } catch (e){ console.error(e); }
+  for (const [, e] of texCache)   if (e.tex) e.tex.dispose();
+  for (const [, e] of labelCache) if (e.tex) e.tex.dispose();
+  texCache.clear();
+  labelCache.clear();
+  pinnedSlots.length = 0;
+  // shrink the grid back to its base size
+  urls.length = names.length = beforeUrls.length = metaOverrides.length = duplicateOf.length = 0;
+  slotGrid.innerHTML = '';
+  SLOTS = 0; ROWS = 0;
+  ensureSlots(24);
+  for (let i = 0; i < SLOTS; i++) renderSlotGridItem(i);
+  showToast('Semua slot dikosongkan');
+});
+
+/* ================= ADMIN AUTH =================
+   Visitors get a fully read-only gallery by default — the Upload button and
+   every edit/delete/pin control (all reachable only through it) simply don't
+   exist in the DOM's visible state until a login succeeds. That's a UX
+   convenience, not the real security boundary: the actual write protection is
+   Postgres RLS on the `works` table/storage bucket, so even a visitor who
+   found a way to call addFiles()/removeSlot() from devtools would still get
+   rejected server-side. Reached by clicking the "About" tab 10 times in quick
+   succession — no visible entry point anywhere on the public page. */
+const loginModal    = document.getElementById('loginModal');
+const loginForm      = document.getElementById('loginForm');
+const loginEmail     = document.getElementById('loginEmail');
+const loginPassword  = document.getElementById('loginPassword');
+const loginError     = document.getElementById('loginError');
+const loginSubmit    = document.getElementById('loginSubmit');
+const logoutBtn       = document.getElementById('logoutBtn');
+const uploadBtnEl     = document.getElementById('uploadBtn');
+let isAdmin = false;
+
+function openLoginModal(){ loginModal.classList.add('open'); loginEmail.focus(); }
+function closeLoginModal(){
+  loginModal.classList.remove('open');
+  loginError.hidden = true;
+  loginForm.reset();
+}
+function setAdminUI(admin){
+  isAdmin = admin;
+  uploadBtnEl.hidden = !admin;
+  logoutBtn.hidden = !admin;
+}
+
+// secret gesture: 10 clicks on the "About" tab within ~600ms of each other
+// (rolling window — each click resets the timer, so it tolerates normal human
+// click-speed variance instead of demanding all 10 inside one fixed deadline).
+// The tab still switches normally on every click; this just also counts them.
+const ADMIN_GESTURE_CLICKS = 10, ADMIN_GESTURE_GAP_MS = 600;
+let adminGestureCount = 0, adminGestureTimer = null;
+const aboutTabBtn = [...tabBtns].find(b => b.dataset.tab === 'about');
+aboutTabBtn.addEventListener('click', () => {
+  if (isAdmin) return;
+  adminGestureCount++;
+  clearTimeout(adminGestureTimer);
+  adminGestureTimer = setTimeout(() => { adminGestureCount = 0; }, ADMIN_GESTURE_GAP_MS);
+  if (adminGestureCount >= ADMIN_GESTURE_CLICKS){
+    adminGestureCount = 0;
+    openLoginModal();
+  }
+});
+
+document.getElementById('closeLogin').addEventListener('click', closeLoginModal);
+loginModal.querySelector('.backdrop').addEventListener('click', closeLoginModal);
+
+loginForm.addEventListener('submit', async e => {
+  e.preventDefault();
+  loginError.hidden = true;
+  loginSubmit.disabled = true;
+  loginSubmit.textContent = 'Masuk...';
+  const { error } = await supabase.auth.signInWithPassword({
+    email: loginEmail.value.trim(), password: loginPassword.value,
+  });
+  loginSubmit.disabled = false;
+  loginSubmit.textContent = 'Masuk';
+  if (error){
+    loginError.textContent = 'Login gagal — cek email/password.';
+    loginError.hidden = false;
+    return;
+  }
+  setAdminUI(true);
+  closeLoginModal();
+  showToast('Berhasil masuk sebagai admin');
+});
+
+logoutBtn.addEventListener('click', async () => {
+  await supabase.auth.signOut();
+  setAdminUI(false);
+  modal.classList.remove('open');
+  showToast('Berhasil keluar');
+});
+
+// keep the UI in sync with any auth change (login/logout here, or a token
+// refresh failure elsewhere) after the initial state below is established
+supabase.auth.onAuthStateChange((_event, session) => setAdminUI(!!session));
+
+/* ================= BOOT ================= */
+(async () => {
+  ensureSlots(24);
+  const { data: { session } } = await supabase.auth.getSession();
+  setAdminUI(!!session);
+  try {
+    const { data: rows, error } = await supabase.from('works').select('*');
+    if (error) throw error;
+    const maxSlot = (rows || []).reduce((m, r) => Math.max(m, r.slot), -1);
+    ensureSlots(maxSlot + 1);
+    // pass 1: images + text overrides, so urls[] is fully populated before
+    // pass 2 needs to validate pin/duplicate-of references against it
+    for (const rec of (rows || [])){
+      if (rec.slot < 0 || rec.slot >= SLOTS) continue;
+      if (rec.file_path){
+        urls[rec.slot]  = supabase.storage.from(WORKS_BUCKET).getPublicUrl(rec.file_path).data.publicUrl;
+        names[rec.slot] = rec.original_name || null;
+      }
+      if (rec.before_file_path){
+        beforeUrls[rec.slot] = supabase.storage.from(WORKS_BUCKET).getPublicUrl(rec.before_file_path).data.publicUrl;
+      }
+      if (rec.title != null || rec.tags != null || rec.year != null){
+        metaOverrides[rec.slot] = { title: rec.title, tags: rec.tags, year: rec.year };
+      }
+    }
+    for (const rec of (rows || [])){
+      if (rec.slot < 0 || rec.slot >= SLOTS) continue;
+      if (rec.pinned && urls[rec.slot]) pinnedSlots.push(rec.slot);
+      // ignore stale duplicate_of: the slot must still be genuinely empty and
+      // the source must still have a real upload, or just fall back to the
+      // plain placeholder rather than trust a possibly-outdated reference
+      if (rec.duplicate_of != null && !urls[rec.slot] &&
+          rec.duplicate_of >= 0 && rec.duplicate_of < SLOTS && urls[rec.duplicate_of]){
+        duplicateOf[rec.slot] = rec.duplicate_of;
+      }
+    }
+    // open centered on one of the pinned cards instead of the fixed default —
+    // rotate through them (round-robin, tracked in localStorage) so a
+    // different pin greets the visitor each reload/visit
+    if (pinnedSlots.length){
+      let idx = parseInt(localStorage.getItem('wemory_pin_rotate') || '0', 10);
+      if (!Number.isFinite(idx)) idx = 0;
+      const startSlot = pinnedSlots[mod(idx, pinnedSlots.length)];
+      const c = slotCenter(startSlot);
+      camX = c.x; camY = c.y;
+      localStorage.setItem('wemory_pin_rotate', String(mod(idx + 1, pinnedSlots.length)));
+    }
+  } catch (err){
+    console.error('Supabase unavailable', err);
+    showToast('Gagal memuat galeri — cek koneksi internet');
+  }
+  for (let i = 0; i < SLOTS; i++) renderSlotGridItem(i);
+  updateSlotCount();
+
+  if (renderer){
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setClearColor(0x000000, 0);   // transparent — page bg shows through, colors match
+    stage.appendChild(renderer.domElement);
+    fitViewport();
+    requestAnimationFrame(frame);
+  } else {
+    showToast('WebGL tidak tersedia di browser ini — galeri tidak dapat ditampilkan');
+  }
+  stage.classList.add('ready');
+})();
+
+/* test hook (used by dev tooling) */
+window.__wemory = {
+  addFiles, removeSlot, ensureSlots,
+  state: () => ({ camX, camY, zoom, curveAmt, cells: cells.size,
+                  slots: SLOTS, rows: ROWS, filled: urls.filter(Boolean).length,
+                  textures: texCache.size, labelTex: labelCache.size, webgl: !!renderer,
+                  mouseX, mouseY, glowOp, hoverDebug }),
+  pan: (dx, dy) => { camX += dx; camY += dy; },
+};
+</script>
+</body>
+</html>
