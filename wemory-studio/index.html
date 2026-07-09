@@ -94,12 +94,28 @@
   }
   @keyframes dotPulse{ 0%,100%{ color:#f0f0ee; } 50%{ color:#4a4e52; } }
   .clocks .tz{ color:#fff; margin-left:10px; }   /* stays white so the difference-blend invert reads cleanly, not the old muted grey */
-  #letsTalk{
+  #beforeBtn{
     background:var(--ink); color:#0a0a0b; font-weight:600; font-size:15px;
-    padding:14px 26px; border-radius:999px; text-decoration:none;
-    transition:transform .25s ease, background .25s ease; display:inline-block;
+    padding:14px 26px; border-radius:999px;
+    display:flex; align-items:center; gap:8px;
+    transition:transform .25s ease, background .25s ease, opacity .25s ease;
+    opacity:.4;   /* dims until a hovered card actually has a before image */
   }
-  #letsTalk:hover{ transform:scale(1.05); background:#fff; }
+  #beforeBtn.ready{ opacity:1; cursor:pointer; }
+  #beforeBtn.ready:hover{ transform:scale(1.05); background:#fff; }
+  #beforeBtn img{ width:15px; height:15px; display:block; }
+
+  #beforeOverlay{
+    position:fixed; inset:0; z-index:70; display:flex;
+    align-items:center; justify-content:center; padding:40px;
+    visibility:hidden; opacity:0; transition:opacity .3s ease, visibility .3s;
+  }
+  #beforeOverlay.open{ visibility:visible; opacity:1; }
+  #beforeOverlay .backdrop{ position:absolute; inset:0; background:rgba(4,4,5,.85); backdrop-filter:blur(10px); }
+  #beforeOverlayImg{
+    position:relative; max-width:90vw; max-height:90vh; border-radius:12px;
+    box-shadow:0 20px 60px rgba(0,0,0,.5); display:block;
+  }
 
   /* ============ BOTTOM UI ============ */
   #hint{
@@ -378,7 +394,7 @@
 
   @media (prefers-reduced-motion: reduce){
     #hint{ animation:none; }
-    #letsTalk, #uploadBtn{ transition:none; }
+    #beforeBtn, #uploadBtn{ transition:none; }
     .clocks .dot{ animation:none; }
   }
 </style>
@@ -400,8 +416,16 @@
       <div><span class="dot">&#9679;</span>YOUR TIME <span class="tz" id="clockLocal">--:--</span></div>
     </div>
   </div>
-  <a id="letsTalk" href="mailto:adelna.abadi20@gmail.com?subject=Let%27s%20Talk%20%E2%80%94%20WEMORY%20Studio">Let's Talk</a>
+  <button id="beforeBtn" title="Lihat versi before dari karya yang di-hover">
+    <img src="Asset/compare.png" alt="">
+    Before
+  </button>
 </header>
+
+<div id="beforeOverlay">
+  <div class="backdrop"></div>
+  <img id="beforeOverlayImg" alt="Before">
+</div>
 
 <div id="hint">[ DRAG TO EXPLORE ]</div>
 
@@ -703,6 +727,7 @@ let curveAmt = 1, targetCurve = 1;               // 1 = curved dome, 0 = flat wa
 let dragging = false, panelOpen = false;
 let mouseX = -1e4, mouseY = -1e4;
 let glowOp = 0;
+let hoverSlot = null;   // slot currently under the mouse, updated each frame — used by the Before button
 // subtle "look toward the mouse" parallax (phantom.land-style): the whole dome's
 // viewing angle nudges toward wherever the mouse sits, as if the camera swivelled
 // to glance that way — card WORLD positions (camX/camY) never change, only the
@@ -1457,6 +1482,8 @@ function frame(){
     entry.hover += (target - entry.hover) * 0.18;
     entry.hoverU.value = entry.hover;
   }
+  hoverSlot = hoverEntry ? hoverEntry.slot : null;
+  beforeBtn.classList.toggle('ready', hoverSlot != null && !!beforeUrls[hoverSlot]);
 
   // hover backdrop: a heavily blurred sample of the hovered card's OWN texture
   // (whatever it currently shows — real artwork or the placeholder), washed
@@ -1490,6 +1517,18 @@ function frame(){
   }
   requestAnimationFrame(frame);
 }
+
+/* ================= BEFORE BUTTON (replaces Let's Talk) ================= */
+const beforeBtn      = document.getElementById('beforeBtn');
+const beforeOverlay   = document.getElementById('beforeOverlay');
+const beforeOverlayImg = document.getElementById('beforeOverlayImg');
+function closeBeforeOverlay(){ beforeOverlay.classList.remove('open'); }
+beforeBtn.addEventListener('click', () => {
+  if (hoverSlot == null || !beforeUrls[hoverSlot]) return;   // dimmed/inert otherwise, see the per-frame .ready toggle
+  beforeOverlayImg.src = beforeUrls[hoverSlot];
+  beforeOverlay.classList.add('open');
+});
+beforeOverlay.querySelector('.backdrop').addEventListener('click', closeBeforeOverlay);
 
 /* ================= DRAG / WHEEL / KEYS ================= */
 const logoEl = document.getElementById('logo');
@@ -2001,6 +2040,7 @@ addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   if (editModal.classList.contains('open')){ closeEdit(); return; }
   if (loginModal.classList.contains('open')){ closeLoginModal(); return; }
+  if (beforeOverlay.classList.contains('open')){ closeBeforeOverlay(); return; }
   modal.classList.remove('open');
 });
 
