@@ -39,12 +39,18 @@
 
   #vignette{
     position:fixed; inset:0; pointer-events:none; z-index:5;
-    /* closest-side (not farthest-corner) sizes the ellipse's own axes to each
-       side's own half-extent, so top/bottom and left/right reach full darkness
-       at the SAME relative distance from center — on a wide viewport,
-       farthest-corner made the short (vertical) axis darken much sooner than
-       the long (horizontal) one, which read as a "gap" only on top/bottom */
-    background:radial-gradient(ellipse closest-side at 50% 50%, transparent 52%, rgba(0,0,0,.8) 100%);
+    /* four independent corner-anchored circles instead of one centered
+       ellipse — a single centered gradient always darkens some way in along
+       straight top/bottom/left/right edges too (any point near an edge is
+       "far from center"), which read as the dark creeping toward the middle.
+       Anchoring one small circle per corner, each fading to fully transparent
+       within a fixed reach, keeps the darkening confined to just the corners
+       themselves and leaves the edges (non-corner) and center alone. */
+    background:
+      radial-gradient(circle at 0% 0%,     rgba(0,0,0,.8) 0%, transparent 30vmax),
+      radial-gradient(circle at 100% 0%,   rgba(0,0,0,.8) 0%, transparent 30vmax),
+      radial-gradient(circle at 0% 100%,   rgba(0,0,0,.8) 0%, transparent 30vmax),
+      radial-gradient(circle at 100% 100%, rgba(0,0,0,.8) 0%, transparent 30vmax);
   }
 
   /* ============ HEADER ============ */
@@ -603,7 +609,13 @@ const TAG2_OPTIONS = ['Thumbnail', 'Banner', 'Profile', 'Mockup'];
 const TAG2_CODE = { Thumbnail: 'T', Banner: 'B', Profile: 'P', Mockup: 'M' };
 const FRICTION = 0.93;
 const MARGIN = 260;                            // extra screen-px rendered beyond viewport
-const TEX_W = 800, TEX_H = 450;                // uploaded images are cover-cropped to this
+// uploaded images are cover-cropped to this. Was 800x450 — visibly soft on
+// high-DPI mobile screens, where a card near the dome's rim/center can get
+// magnified by the curve's perspective well past its base CELL size, so the
+// GPU ends up upscaling a lower-res texture past its native resolution.
+// 1024x576 costs ~1.6x the GPU memory per texture (still only ~113MB at the
+// full TEX_MAX=48 cap, and most of that cap is never resident at once).
+const TEX_W = 1024, TEX_H = 576;
 const LT_S = 1.5;                              // label texture supersampling (text crispness)
 const TEX_MAX = 48;                            // LRU cap per texture cache
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
