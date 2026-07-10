@@ -1563,10 +1563,11 @@ function frame(){
         if (beforeUrls[beforeSwapEntry.slot]){
           const bt = beforeTexture(beforeSwapEntry.slot);
           if (bt) beforeSwapEntry.mat.uniforms.uMap.value = bt;   // still loading? beforeTexture()'s onload applies it once ready
-          beforeSwapEntry.mat.uniforms.uInvert.value = 1;   // stacked film-negative treatment for the before-image itself
-          beforeSwapEntry.mat.uniforms.uMono.value = 1;
+          // plain swap — no invert/mono here, this IS the before-image, shown as-is
         } else {
-          beforeSwapEntry.mat.uniforms.uInvert.value = 1;   // plain color-negative — "no before available" indicator
+          // "no before available" indicator — stacked color-negative + monochrome (film-negative look)
+          beforeSwapEntry.mat.uniforms.uInvert.value = 1;
+          beforeSwapEntry.mat.uniforms.uMono.value = 1;
         }
       }
     }
