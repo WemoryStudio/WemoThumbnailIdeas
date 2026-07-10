@@ -27,7 +27,16 @@
   /* ============ STAGE (WebGL canvas — cards, meta text, grid lines & glow all
      live inside the GL scene so they share one curved surface) ============ */
   #stage{
-    position:fixed; inset:0; overflow:hidden;
+    /* position:absolute, not fixed — html/body never scroll (overflow:hidden
+       above), so absolute looks pixel-identical to fixed here, but fixed (and
+       sticky) UNCONDITIONALLY creates a new stacking context regardless of
+       z-index, which walls this canvas off from header's mix-blend-mode
+       below even with z-index removed. absolute only creates a stacking
+       context if z-index is set to something other than auto, so leaving
+       z-index alone here keeps stage, #vignette and header all painting into
+       the SAME stacking context — required for the blend to reach the
+       canvas at all. Don't change back to fixed. */
+    position:absolute; inset:0; overflow:hidden;
     cursor:grab; touch-action:none;
     user-select:none; -webkit-user-select:none;
     opacity:0; transition:opacity .9s ease .15s, filter .5s ease;
@@ -38,13 +47,8 @@
   #stage canvas{ display:block; }
 
   #vignette{
-    position:fixed; inset:0; pointer-events:none;
-    /* no z-index — an explicit stacking context here (or on header, below)
-       silently breaks mix-blend-mode:difference on the header text from
-       reaching the canvas behind it: even though the property still computes
-       correctly, browsers isolate blending to within a stacking context in
-       practice. DOM order alone (stage, then vignette, then header) already
-       puts these three in the right visual order without needing z-index. */
+    /* absolute, not fixed — see the comment on #stage above; same reasoning */
+    position:absolute; inset:0; pointer-events:none;
     /* four independent corner-anchored circles instead of one centered
        ellipse — a single centered gradient always darkens some way in along
        straight top/bottom/left/right edges too (any point near an edge is
@@ -61,10 +65,15 @@
 
   /* ============ HEADER ============ */
   header{
-    position:fixed; top:0; left:0; right:0;
+    /* absolute, not fixed — see the comment on #stage above; same reasoning.
+       This is the actual fix for the header text "negative"/invert effect
+       not showing: removing z-index alone (an earlier attempt) was not
+       enough, because position:fixed itself unconditionally creates a
+       stacking context independent of z-index — header was still isolated
+       from the canvas either way. */
+    position:absolute; top:0; left:0; right:0;
     display:flex; align-items:flex-start; justify-content:space-between;
     padding:22px 28px; pointer-events:none;
-    /* no z-index here either — see the comment on #vignette above */
   }
   header > *{ pointer-events:auto; }
   #logo{ position:relative; display:block; width:46px; height:46px; text-decoration:none; color:var(--ink); }
@@ -2246,12 +2255,40 @@ async function loadWorksData({ rotatePin = false } = {}){
   }
 }
 
+// close any gap left in the middle of the grid — an empty slot with real
+// content somewhere after it. removeSlot() only closes a gap it JUST
+// created; this catches everything else (gaps left over from before the
+// auto-shift feature shipped, or any other drift) at boot instead of
+// requiring the admin to "bait" it by uploading + deleting something.
+// Admin-only, same RLS reasoning as the duplicate top-up pass in
+// loadWorksData(). Returns true if it closed at least one gap.
+async function compactExistingGaps(){
+  let closedAny = false;
+  for (let guard = 0; guard < SLOTS; guard++){
+    let gap = -1;
+    outer: for (let i = 0; i < SLOTS; i++){
+      if (urls[i]) continue;
+      for (let k = i + 1; k < SLOTS; k++){
+        if (urls[k]){ gap = i; break outer; }
+      }
+    }
+    if (gap === -1) break;   // no slot has real content sitting after an empty one — nothing left to close
+    const { error } = await supabase.rpc('shift_slots_after', { deleted_slot: gap });
+    if (error){ console.error(error); break; }
+    closedAny = true;
+    await loadWorksData();   // resync urls[] before scanning for the next gap
+  }
+  return closedAny;
+}
+
 /* ================= BOOT ================= */
 (async () => {
   ensureSlots(24);
   const { data: { session } } = await supabase.auth.getSession();
   setAdminUI(!!session);
   try {
+    await loadWorksData();
+    if (isAdmin) await compactExistingGaps();
     await loadWorksData({ rotatePin: true });
   } catch (err){
     console.error('Supabase unavailable', err);
