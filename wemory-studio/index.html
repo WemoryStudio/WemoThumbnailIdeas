@@ -38,7 +38,13 @@
   #stage canvas{ display:block; }
 
   #vignette{
-    position:fixed; inset:0; pointer-events:none; z-index:5;
+    position:fixed; inset:0; pointer-events:none;
+    /* no z-index — an explicit stacking context here (or on header, below)
+       silently breaks mix-blend-mode:difference on the header text from
+       reaching the canvas behind it: even though the property still computes
+       correctly, browsers isolate blending to within a stacking context in
+       practice. DOM order alone (stage, then vignette, then header) already
+       puts these three in the right visual order without needing z-index. */
     /* four independent corner-anchored circles instead of one centered
        ellipse — a single centered gradient always darkens some way in along
        straight top/bottom/left/right edges too (any point near an edge is
@@ -55,9 +61,10 @@
 
   /* ============ HEADER ============ */
   header{
-    position:fixed; top:0; left:0; right:0; z-index:20;
+    position:fixed; top:0; left:0; right:0;
     display:flex; align-items:flex-start; justify-content:space-between;
     padding:22px 28px; pointer-events:none;
+    /* no z-index here either — see the comment on #vignette above */
   }
   header > *{ pointer-events:auto; }
   #logo{ position:relative; display:block; width:46px; height:46px; text-decoration:none; color:var(--ink); }
