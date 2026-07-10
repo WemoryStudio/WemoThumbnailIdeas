@@ -979,10 +979,18 @@ function domeVert(zOff, withSphere = false){ return /* glsl */`
       vec3 dirU = uSph.xyz / sc;
       vec3 tX = normalize(cross(vec3(0.0, 1.0, 0.0), dirU));
       vec3 tY = cross(dirU, tX);
-      vec3 sUp = uSphC + dirU * uSphR + (tX * position.x + tY * position.y) * sc;
+      // wrap the card ONTO the sphere surface (not a flat tangent tile): local
+      // x/y become arc lengths, every vertex lands exactly at radius R — the
+      // card visibly bends with the ball, matching how the Work dome bends
+      // cards along its own surface instead of faceting them
+      float aa = position.x * sc / uSphR;
+      float bb = position.y * sc / uSphR;
+      vec3 dirV = dirU * (cos(aa) * cos(bb)) + tX * (sin(aa) * cos(bb)) + tY * sin(bb);
+      vec3 sUp = uSphC + dirV * uSphR;
       vec3 mS = vec3(sUp.x, -sUp.y, sUp.z + ${zOff.toFixed(1)});
-      // depth cue: cards on the far hemisphere darken like rim cards do on the dome
-      float shadeS = clamp((1.0 - dirU.z) * 0.55, 0.0, 1.0);
+      // depth cue: per-VERTEX (dirV, not the card-center dirU) so the shading
+      // sweeps continuously across each bent card and around the whole ball
+      float shadeS = clamp((1.0 - dirV.z) * 0.55, 0.0, 1.0);
       m = mix(m, mS, uSph.w);
       vShade = mix(vShade, shadeS, uSph.w);
     }` : ''}
