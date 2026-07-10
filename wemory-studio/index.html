@@ -955,7 +955,7 @@ function domeVert(zOff){ return /* glsl */`
 `; }
 
 const CARD_FRAG = /* glsl */`
-  uniform sampler2D uMap; uniform float uHover; uniform float uInvert;
+  uniform sampler2D uMap; uniform float uHover; uniform float uInvert; uniform float uMono;
   varying vec2 vUv; varying float vShade;
   void main(){
     // at extreme curvature a few triangles near the clamp boundary can turn
@@ -968,6 +968,10 @@ const CARD_FRAG = /* glsl */`
     // "before" mode's stand-in for a card with no before image: invert the
     // artwork itself right on the card instead of any separate indicator
     col = mix(col, vec3(1.0) - col, uInvert);
+    // before mode's swapped-in before-image gets this STACKED on top of the
+    // invert above (film-negative look) — desaturate to luminance
+    float lum = dot(col, vec3(0.299, 0.587, 0.114));
+    col = mix(col, vec3(lum), uMono);
     // cards darken as they turn away — depth cue, like the reference
     col *= 1.0 - 0.5 * clamp(vShade, 0.0, 1.0);
     col *= 1.0 + 0.10 * uHover;
@@ -1330,7 +1334,7 @@ function makeCellEntry(){
   const hoverU  = { value: 0 };
   const mat = new THREE.ShaderMaterial({
     uniforms: { uCam: U.uCam, uZoom: U.uZoom, uCurve: U.uCurve, uVp: U.uVp, uAng: U.uAng, uLook: U.uLook,
-                uCellPos: cellPos, uMap: { value: placeholderTex }, uHover: hoverU, uInvert: { value: 0 } },
+                uCellPos: cellPos, uMap: { value: placeholderTex }, uHover: hoverU, uInvert: { value: 0 }, uMono: { value: 0 } },
     vertexShader: domeVert(0), fragmentShader: CARD_FRAG,
     // at extreme curvature a card's own tessellation can briefly fold on itself
     // right at the clamp boundary; DoubleSide keeps those triangles visible
@@ -1359,7 +1363,8 @@ function makeCellEntry(){
 function setCellSlot(entry, slot){
   entry.slot = slot;
   entry.mat.uniforms.uMap.value  = slotTexture(slot);
-  entry.mat.uniforms.uInvert.value = 0;   // reset — a recycled entry may have been left inverted by before-mode
+  entry.mat.uniforms.uInvert.value = 0;   // reset — a recycled entry may have been left inverted/monochrome by before-mode
+  entry.mat.uniforms.uMono.value = 0;
   entry.lmat.uniforms.uMap.value = labelTexFor(slot);
   entry.filled = !!urls[slot];
 }
@@ -1379,6 +1384,7 @@ function refreshSlotEverywhere(slot){
     if (entry.slot === slot){
       entry.mat.uniforms.uMap.value  = slotTexture(slot);
       entry.mat.uniforms.uInvert.value = 0;
+      entry.mat.uniforms.uMono.value = 0;
       entry.lmat.uniforms.uMap.value = labelTexFor(slot);
       entry.filled = !!urls[slot];
     }
@@ -1540,22 +1546,27 @@ function frame(){
     entry.hoverU.value = entry.hover;
   }
   // before mode: swap the hovered card's own texture to its before-image in
-  // place (a reskin, not an overlay), or invert it if it has no before-image
-  // — only touch a cell's uniforms when the hovered entry actually CHANGES,
-  // not every frame, to keep this as cheap as the rest of the hover state
+  // place (a reskin, not an overlay) — stacked with invert+monochrome for a
+  // film-negative look — or just invert it if it has no before-image, as a
+  // "nothing to show" indicator. Only touch a cell's uniforms when the
+  // hovered entry actually CHANGES, not every frame, to keep this as cheap
+  // as the rest of the hover state.
   if (beforeMode){
     if (beforeSwapEntry !== hoverEntry){
       if (beforeSwapEntry){   // revert whatever was previously swapped/inverted
         beforeSwapEntry.mat.uniforms.uMap.value = slotTexture(beforeSwapEntry.slot);
         beforeSwapEntry.mat.uniforms.uInvert.value = 0;
+        beforeSwapEntry.mat.uniforms.uMono.value = 0;
       }
       beforeSwapEntry = hoverEntry;
       if (beforeSwapEntry){
         if (beforeUrls[beforeSwapEntry.slot]){
           const bt = beforeTexture(beforeSwapEntry.slot);
           if (bt) beforeSwapEntry.mat.uniforms.uMap.value = bt;   // still loading? beforeTexture()'s onload applies it once ready
+          beforeSwapEntry.mat.uniforms.uInvert.value = 1;   // stacked film-negative treatment for the before-image itself
+          beforeSwapEntry.mat.uniforms.uMono.value = 1;
         } else {
-          beforeSwapEntry.mat.uniforms.uInvert.value = 1;
+          beforeSwapEntry.mat.uniforms.uInvert.value = 1;   // plain color-negative — "no before available" indicator
         }
       }
     }
@@ -1563,6 +1574,7 @@ function frame(){
     // mode just turned off while something was still swapped
     beforeSwapEntry.mat.uniforms.uMap.value = slotTexture(beforeSwapEntry.slot);
     beforeSwapEntry.mat.uniforms.uInvert.value = 0;
+    beforeSwapEntry.mat.uniforms.uMono.value = 0;
     beforeSwapEntry = null;
   }
 
