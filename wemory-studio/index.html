@@ -744,6 +744,16 @@ let dragging = false, panelOpen = false;
 let mouseX = -1e4, mouseY = -1e4;
 let glowOp = 0;
 let hoverSlot = null;   // slot currently under the mouse, updated each frame — used by the Before button
+// the Before button lives in the header (top-right), not next to whatever
+// card is hovered — with one mouse, moving toward the button to click it
+// necessarily leaves the card, so a live "ready = hoverSlot has a before
+// image" state would go dim the instant the mouse starts travelling there,
+// making the button unclickable. beforeReadySlot is a STICKY version: it
+// latches onto the last hovered before-having slot and only lets go after a
+// grace period with the mouse over neither the card nor the button (see
+// frame() and beforeBtn's mouseenter below).
+let beforeReadySlot = null;
+let beforeClearTimer = null;
 // subtle "look toward the mouse" parallax (phantom.land-style): the whole dome's
 // viewing angle nudges toward wherever the mouse sits, as if the camera swivelled
 // to glance that way — card WORLD positions (camX/camY) never change, only the
@@ -1499,7 +1509,16 @@ function frame(){
     entry.hoverU.value = entry.hover;
   }
   hoverSlot = hoverEntry ? hoverEntry.slot : null;
-  beforeBtn.classList.toggle('ready', hoverSlot != null && !!beforeUrls[hoverSlot]);
+  if (hoverSlot != null && beforeUrls[hoverSlot]){
+    beforeReadySlot = hoverSlot;
+    if (beforeClearTimer){ clearTimeout(beforeClearTimer); beforeClearTimer = null; }
+  } else if (beforeReadySlot != null && !beforeClearTimer){
+    // grace period — give the mouse time to travel from the card to the
+    // button before the "ready" state lets go (see the comment on
+    // beforeReadySlot's declaration)
+    beforeClearTimer = setTimeout(() => { beforeReadySlot = null; beforeClearTimer = null; }, 700);
+  }
+  beforeBtn.classList.toggle('ready', beforeReadySlot != null);
 
   // hover backdrop: a heavily blurred sample of the hovered card's OWN texture
   // (whatever it currently shows — real artwork or the placeholder), washed
@@ -1539,9 +1558,15 @@ const beforeBtn      = document.getElementById('beforeBtn');
 const beforeOverlay   = document.getElementById('beforeOverlay');
 const beforeOverlayImg = document.getElementById('beforeOverlayImg');
 function closeBeforeOverlay(){ beforeOverlay.classList.remove('open'); }
+// cancel the pending clear the instant the mouse actually reaches the
+// button — covers the case where the 700ms grace period would otherwise
+// expire while the cursor is sitting right on top of it
+beforeBtn.addEventListener('mouseenter', () => {
+  if (beforeClearTimer){ clearTimeout(beforeClearTimer); beforeClearTimer = null; }
+});
 beforeBtn.addEventListener('click', () => {
-  if (hoverSlot == null || !beforeUrls[hoverSlot]) return;   // dimmed/inert otherwise, see the per-frame .ready toggle
-  beforeOverlayImg.src = beforeUrls[hoverSlot];
+  if (beforeReadySlot == null || !beforeUrls[beforeReadySlot]) return;   // dimmed/inert otherwise, see the per-frame .ready toggle
+  beforeOverlayImg.src = beforeUrls[beforeReadySlot];
   beforeOverlay.classList.add('open');
 });
 beforeOverlay.querySelector('.backdrop').addEventListener('click', closeBeforeOverlay);
