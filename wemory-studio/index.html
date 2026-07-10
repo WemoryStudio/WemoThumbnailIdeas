@@ -2292,6 +2292,31 @@ async function compactExistingGaps(){
   return closedAny;
 }
 
+// shrink the grid back down when everything past the real content is empty
+// placeholder capacity. Deleting a slot only ever SHIFTS later slots back —
+// there's nothing real after a run of trailing empty slots to pull forward,
+// so removeSlot()/compactExistingGaps() can never make SLOTS itself
+// smaller again (ensureSlots() only ever grows it). Admin-only (deletes DB
+// rows outright) — call this AFTER compactExistingGaps() so real content is
+// already packed at the front and "highest real slot" is accurate.
+async function trimTrailingEmptySlots(){
+  let highestReal = -1;
+  for (let i = 0; i < SLOTS; i++) if (urls[i]) highestReal = i;
+  const target = Math.max(24, Math.ceil((highestReal + 1) / COLS) * COLS);
+  if (target >= SLOTS) return false;
+  const { error } = await supabase.from('works').delete().gte('slot', target);
+  if (error){ console.error(error); return false; }
+  for (let i = target; i < SLOTS; i++){
+    const el = slotGrid.querySelector('.slot-item[data-slot="' + i + '"]');
+    if (el) el.remove();
+  }
+  urls.length = target; names.length = target; beforeUrls.length = target;
+  metaOverrides.length = target; duplicateOf.length = target;
+  SLOTS = target; ROWS = SLOTS / COLS;
+  flushCells();
+  return true;
+}
+
 /* ================= BOOT ================= */
 (async () => {
   ensureSlots(24);
@@ -2303,7 +2328,10 @@ async function compactExistingGaps(){
     // topUp pass that should run is the final call below, once the grid has
     // fully settled
     await loadWorksData({ topUp: false });
-    if (isAdmin) await compactExistingGaps();
+    if (isAdmin){
+      await compactExistingGaps();
+      await trimTrailingEmptySlots();
+    }
     await loadWorksData({ rotatePin: true });
   } catch (err){
     console.error('Supabase unavailable', err);
