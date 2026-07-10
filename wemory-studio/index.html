@@ -740,6 +740,17 @@ let glowOp = 0;
 // state, so frame() can revert it the instant hover moves elsewhere.
 let beforeMode = false;
 let beforeSwapEntry = null;
+// "sphere" mode (About tab): the cards currently on screen fly off the dome
+// and assemble into a floating ball — each grid row becomes one latitude ring
+// of the sphere, alternating spin direction per ring, then the formed ball
+// idles with a slow bob + the rings' continued slow rotation until the user
+// leaves the tab (a scroll-driven 3D scene continues the journey later).
+let sphereMode = false;    // target state — true while the About tab is active
+let sphereOn   = false;    // any sphere influence still present (forming, formed, or unforming)
+let sphereT0   = 0;        // timestamp of the last mode toggle (drives per-card stagger)
+let sphereGlobal = 0;      // eased 0..1 global amount — BG-line fade, bob amplitude, spin easing
+let sphereLastT = 0;       // for per-frame dt (ring spin accumulation)
+const sphereRings = [];    // per latitude ring: { phi, n, spin, thetaOff, scaleRel }
 // subtle "look toward the mouse" parallax (phantom.land-style): the whole dome's
 // viewing angle nudges toward wherever the mouse sits, as if the camera swivelled
 // to glance that way — card WORLD positions (camX/camY) never change, only the
@@ -911,6 +922,10 @@ const U = {
   uVp:    { value: new THREE.Vector2(vw, vh) },
   uAng:   { value: new THREE.Vector2(ANG_X, ANG_Y) },
   uLook:  { value: new THREE.Vector2(0, 0) },
+  // sphere mode (About) — shared by every card material; per-card direction/
+  // progress live in each cell's own uSph uniform (see makeCellEntry)
+  uSphC:  { value: new THREE.Vector3(0, 0, 0) },   // sphere center in y-up camera space (y carries the idle bob)
+  uSphR:  { value: 300 },                          // sphere radius in px (recomputed per frame from the viewport)
 };
 /* hover backdrop state, consumed by the background sheet's fragment shader */
 const GU = {
@@ -921,6 +936,7 @@ const GU = {
   // frame — see the long comment on bgMesh below for why the grid-line sheet
   // needs this instead of the raw (unbounded) uCam.
   uCamLocal: { value: new THREE.Vector2(0, 0) },
+  uSphG:     { value: 0 },   // global sphere amount — fades the grid-line sheet out while the ball forms
 };
 
 /* The dome: every vertex is wrapped onto the inside of a horizontal + vertical
@@ -929,9 +945,10 @@ const GU = {
    sheets and the grid lines all lie on the same mathematical surface — no facets,
    no drift between text and card. `zOff` lifts a layer slightly off the surface
    (label sheets sit +3px in front of their card) without changing its curvature. */
-function domeVert(zOff){ return /* glsl */`
+function domeVert(zOff, withSphere = false){ return /* glsl */`
   uniform vec2 uCam; uniform float uZoom; uniform float uCurve;
   uniform vec2 uVp; uniform vec2 uAng; uniform vec2 uCellPos; uniform vec2 uLook;
+  ${withSphere ? 'uniform vec4 uSph; uniform vec3 uSphC; uniform float uSphR;' : ''}
   varying vec2 vUv; varying float vShade;
   void main(){
     vUv = uv;
@@ -951,6 +968,24 @@ function domeVert(zOff){ return /* glsl */`
     vec3 m = mix(vec3(p, 0.0), q, uCurve);
     m.z += ${zOff.toFixed(1)};
     vShade = uCurve * (1.0 - cos(tx) * cos(ty));
+    ${withSphere ? `
+    // sphere mode (About tab): blend this vertex from its dome position to a
+    // spot on a floating ball. uSph.xyz = outward unit direction scaled by the
+    // card's on-sphere size, uSph.w = this card's eased morph progress (JS
+    // staggers it per card). Built in y-UP camera space, camera-independent —
+    // the ball stays centered on screen regardless of camX/camY/zoom/look.
+    if (uSph.w > 0.0005){
+      float sc = length(uSph.xyz);
+      vec3 dirU = uSph.xyz / sc;
+      vec3 tX = normalize(cross(vec3(0.0, 1.0, 0.0), dirU));
+      vec3 tY = cross(dirU, tX);
+      vec3 sUp = uSphC + dirU * uSphR + (tX * position.x + tY * position.y) * sc;
+      vec3 mS = vec3(sUp.x, -sUp.y, sUp.z + ${zOff.toFixed(1)});
+      // depth cue: cards on the far hemisphere darken like rim cards do on the dome
+      float shadeS = clamp((1.0 - dirU.z) * 0.55, 0.0, 1.0);
+      m = mix(m, mS, uSph.w);
+      vShade = mix(vShade, shadeS, uSph.w);
+    }` : ''}
     gl_Position = projectionMatrix * viewMatrix * vec4(m.x, -m.y, m.z, 1.0);
   }
 `; }
@@ -984,11 +1019,13 @@ const CARD_FRAG = /* glsl */`
    shader as its card, so the text's curvature and position always match the card */
 const LABEL_FRAG = /* glsl */`
   uniform sampler2D uMap;
+  uniform vec4 uSph;   // shared with the card's sphere uniform — labels don't fly to the ball, they dissolve in place as their card leaves
   varying vec2 vUv; varying float vShade;
   void main(){
     vec2 uv = clamp(vUv, 0.0, 1.0);   // guard against overshoot on near-degenerate triangles
     vec4 t = texture2D(uMap, uv);     // stays sharp — no defocus, matches the card
     float a = t.a * (1.0 - smoothstep(0.55, 0.92, vShade));   // fade text as its card turns away
+    a *= 1.0 - clamp(uSph.w * 2.5, 0.0, 1.0);   // gone early in the card's flight to the sphere
     if (a < 0.004) discard;
     vec3 col = t.rgb * (1.0 - 0.45 * clamp(vShade, 0.0, 1.0));
     gl_FragColor = vec4(col, a);
@@ -1027,6 +1064,7 @@ const BG_VERT = /* glsl */`
 `;
 const BG_FRAG = /* glsl */`
   uniform vec4 uGlowRect; uniform sampler2D uGlowTex; uniform float uGlowAmt;
+  uniform float uSphG;
   varying vec2 vWorld; varying float vShade;
   float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
   void main(){
@@ -1090,6 +1128,7 @@ const BG_FRAG = /* glsl */`
     vec3 lineColor = vec3(0.55, 0.58, 0.62);
     vec3 backdropColor = blurCol * 0.85;
     float aTot = lineA + glowA * (1.0 - lineA);
+    aTot *= 1.0 - uSphG;   // grid lines fade out while the About-tab sphere forms (they belong to the flat grid, not the ball)
     if (aTot < 0.004) discard;
     vec3 col = (lineColor * lineA + backdropColor * glowA * (1.0 - lineA)) / max(aTot, 1e-4);
     gl_FragColor = vec4(col, aTot);
@@ -1121,7 +1160,7 @@ const bgMesh = new THREE.Mesh(
   new THREE.PlaneGeometry(2, 2, 480, 320),
   new THREE.ShaderMaterial({
     uniforms: { uCamLocal: GU.uCamLocal, uZoom: U.uZoom, uCurve: U.uCurve, uVp: U.uVp, uAng: U.uAng, uLook: U.uLook,
-                uGlowRect: GU.uGlowRect, uGlowTex: GU.uGlowTex, uGlowAmt: GU.uGlowAmt },
+                uGlowRect: GU.uGlowRect, uGlowTex: GU.uGlowTex, uGlowAmt: GU.uGlowAmt, uSphG: GU.uSphG },
     vertexShader: BG_VERT, fragmentShader: BG_FRAG,
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
   })
@@ -1333,10 +1372,14 @@ document.fonts.ready.then(() => {
 function makeCellEntry(){
   const cellPos = { value: new THREE.Vector2() };   // shared by card + label sheet
   const hoverU  = { value: 0 };
+  // per-cell sphere state: xyz = outward direction × on-sphere card scale,
+  // w = morph progress. One object shared by card (moves it) + label (fades it).
+  const sphU    = { value: new THREE.Vector4(0, 0, 1, 0) };
   const mat = new THREE.ShaderMaterial({
     uniforms: { uCam: U.uCam, uZoom: U.uZoom, uCurve: U.uCurve, uVp: U.uVp, uAng: U.uAng, uLook: U.uLook,
-                uCellPos: cellPos, uMap: { value: placeholderTex }, uHover: hoverU, uInvert: { value: 0 }, uMono: { value: 0 } },
-    vertexShader: domeVert(0), fragmentShader: CARD_FRAG,
+                uCellPos: cellPos, uMap: { value: placeholderTex }, uHover: hoverU, uInvert: { value: 0 }, uMono: { value: 0 },
+                uSph: sphU, uSphC: U.uSphC, uSphR: U.uSphR },
+    vertexShader: domeVert(0, true), fragmentShader: CARD_FRAG,
     // at extreme curvature a card's own tessellation can briefly fold on itself
     // right at the clamp boundary; DoubleSide keeps those triangles visible
     // instead of letting default backface culling punch black holes in the mesh
@@ -1348,7 +1391,7 @@ function makeCellEntry(){
 
   const lmat = new THREE.ShaderMaterial({
     uniforms: { uCam: U.uCam, uZoom: U.uZoom, uCurve: U.uCurve, uVp: U.uVp, uAng: U.uAng, uLook: U.uLook,
-                uCellPos: cellPos, uMap: { value: placeholderTex } },
+                uCellPos: cellPos, uMap: { value: placeholderTex }, uSph: sphU },
     vertexShader: domeVert(3), fragmentShader: LABEL_FRAG,
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
   });
@@ -1357,7 +1400,7 @@ function makeCellEntry(){
   lmesh.renderOrder = 1;
   scene.add(lmesh);
 
-  return { mesh, mat, lmesh, lmat, cellPos, hoverU,
+  return { mesh, mat, lmesh, lmat, cellPos, hoverU, sphU, sph: null,
            slot: -1, wx: 0, wy: 0, hover: 0, filled: false };
 }
 
@@ -1376,6 +1419,8 @@ function recycle(entry){
   entry.lmesh.visible = false;
   entry.hover = 0;
   entry.hoverU.value = 0;
+  entry.sph = null;
+  entry.sphU.value.w = 0;   // a pooled entry must never re-enter mid-flight to the sphere
   pool.push(entry);
 }
 
@@ -1422,6 +1467,72 @@ function axisExtent(halfVp, ang, cellSpan){
     if (t >= THETA_MAX - 1e-4) return (p + cellSpan) / zoom;  // past the rim: cull the rest
   }
   return 9000 / zoom;
+}
+
+/* ================= SPHERE MODE (About tab) ================= */
+function easeInOutCubic(t){ return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+
+// Map the cards currently on screen onto latitude rings of a ball: each grid
+// row = one ring, cards spread evenly around its full circle. Called on entering
+// sphere mode, and again if the working set changes mid-sphere (rare — e.g. an
+// admin delete flushes the cells) so no card is ever left without a target.
+function buildSphereLayout(){
+  const rows = new Map();
+  for (const entry of cells.values()){
+    const r = Math.round(entry.wy / CELL_H);
+    if (!rows.has(r)) rows.set(r, []);
+    rows.get(r).push(entry);
+  }
+  const rKeys = [...rows.keys()].sort((a, b) => a - b);
+  const ringCount = rKeys.length;
+  // total latitude spread — up to ~120°, held off the poles where the tangent
+  // frame (cross with world-up) degenerates and rings would pile onto a point
+  const phiSpread = ringCount > 1 ? Math.min(2.1, (ringCount - 1) * 0.52) : 0;
+  const phiStep = ringCount > 1 ? phiSpread / (ringCount - 1) : 0.5;
+  const oldOff = sphereRings.map(g => g.thetaOff);   // keep spin phase across a mid-sphere rebuild
+  sphereRings.length = 0;
+  rKeys.forEach((r, k) => {
+    const entries = rows.get(r).sort((a, b) => a.wx - b.wx);
+    const phi = ringCount > 1 ? phiSpread / 2 - phiStep * k : 0;
+    const n = entries.length;
+    // card size on the ball, relative to R: fit within this ring's horizontal
+    // chord between neighbors AND the vertical arc to the next ring
+    // NOTE units: chordRel/phiStep are relative to R (unitless), CARD_W/H are
+    // px — the quotient is intentionally tiny (~0.001); the shader multiplies
+    // it back up by R. The floor only guards against a degenerate zero.
+    const chordRel = 2 * Math.sin(Math.PI / Math.max(n, 2)) * Math.cos(phi);
+    const scaleRel = Math.max(0.0002, Math.min(chordRel * 0.9 / CARD_W, phiStep * 0.86 / CARD_H));
+    sphereRings.push({
+      phi, n,
+      spin: k % 2 ? 1 : -1,   // adjacent rows spin opposite ways — explicit request
+      thetaOff: oldOff[k] !== undefined ? oldOff[k] : 0,
+      scaleRel,
+    });
+    entries.forEach((entry, j) => {
+      entry.sph = {
+        ring: k,
+        baseTheta: (j / n) * Math.PI * 2,
+        // stagger: rings start outside-in with a per-card jitter, so the grid
+        // dissolves organically instead of snapping row-by-row
+        delay: k * 90 + mulberry32(entry.slot * 7919 + 13)() * 260,
+        startProg: entry.sphU.value.w,   // mid-flight toggles morph from wherever the card already is
+      };
+    });
+  });
+}
+
+function setSphereMode(on){
+  if (on === sphereMode) return;
+  sphereMode = on;
+  sphereT0 = performance.now();
+  vx = vy = 0;   // kill any drag inertia — the dome anchor must hold still under the morph
+  if (on){
+    sphereOn = true;
+    buildSphereLayout();
+  } else {
+    for (const entry of cells.values())
+      if (entry.sph) entry.sph.startProg = entry.sphU.value.w;
+  }
 }
 
 /* ================= RENDER LOOP ================= */
@@ -1484,8 +1595,53 @@ function frame(){
       }
     }
   }
-  for (const [key, entry] of cells){
-    if (!needed.has(key)){ cells.delete(key); recycle(entry); }
+  // while any sphere influence is live, never recycle cells — the ball is built
+  // from exactly the cards that were on screen when About was opened, and the
+  // camera is frozen anyway (drag disabled, inertia zeroed), so the working set
+  // only needs to survive, not update
+  if (!sphereOn){
+    for (const [key, entry] of cells){
+      if (!needed.has(key)){ cells.delete(key); recycle(entry); }
+    }
+  }
+
+  // sphere mode: per-card morph progress + ring spin + idle bob. Uniform-only
+  // updates (no geometry work) — the vertex shader does the actual positioning.
+  if (sphereOn){
+    const now = performance.now();
+    const dt = Math.min(50, now - (sphereLastT || now));
+    sphereLastT = now;
+    const R = Math.min(vw, vh) * 0.335;
+    const target = sphereMode ? 1 : 0;
+    const DUR = reduceMotion ? 1 : (sphereMode ? 950 : 800);
+    sphereGlobal += (target - sphereGlobal) * (reduceMotion ? 1 : 0.06);
+    GU.uSphG.value = Math.min(1, sphereGlobal * 1.6);   // grid lines gone well before the ball settles
+    // rings spin fast while forming, settle into a slow idle rotation once
+    // formed, and wind down with sphereGlobal on the way out
+    const spinSpeed = reduceMotion ? 0 : (0.10 + 0.55 * (1 - sphereGlobal)) * 0.001;
+    for (const g of sphereRings) g.thetaOff += g.spin * spinSpeed * dt * (sphereMode ? 1 : sphereGlobal);
+    // idle float: gentle bob, amplitude follows formation so it never jerks
+    const bobY = reduceMotion ? 0 : Math.sin(now * 0.0011) * 14 * sphereGlobal;
+    U.uSphC.value.set(0, bobY, 0);
+    U.uSphR.value = R;
+    let anyActive = false, needRebuild = false;
+    for (const entry of cells.values()){
+      if (!entry.sph){ needRebuild = true; continue; }
+      const s = entry.sph, g = sphereRings[s.ring];
+      const t = clamp((now - sphereT0 - s.delay) / DUR, 0, 1);
+      if (t < 1) anyActive = true;
+      const prog = s.startProg + (target - s.startProg) * easeInOutCubic(t);
+      const theta = s.baseTheta + g.thetaOff;
+      const cp = Math.cos(g.phi), sc = g.scaleRel * R;
+      entry.sphU.value.set(cp * Math.sin(theta) * sc, Math.sin(g.phi) * sc, cp * Math.cos(theta) * sc, prog);
+    }
+    if (needRebuild) buildSphereLayout();
+    if (!sphereMode && !anyActive && sphereGlobal < 0.01){
+      sphereOn = false;
+      sphereGlobal = 0;
+      GU.uSphG.value = 0;
+      for (const entry of cells.values()) entry.sphU.value.w = 0;
+    }
   }
 
   // hover: hit-test the mouse against each card's projected box (several boxes can
@@ -1697,10 +1853,16 @@ function moveTabThumb(btn){
 function setTab(name){
   tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   moveTabThumb([...tabBtns].find(b => b.dataset.tab === name));
-  document.getElementById('panel-about').classList.toggle('open', name === 'about');
+  // About no longer opens the text panel — the gallery itself morphs into a
+  // floating ball of the works (first stage of the scroll journey; the old
+  // panel markup stays for later reuse in that journey). Careers keeps the
+  // classic dimmed-panel treatment.
+  document.getElementById('panel-about').classList.remove('open');
   document.getElementById('panel-careers').classList.toggle('open', name === 'careers');
-  panelOpen = name !== 'work';
-  stage.classList.toggle('dimmed', panelOpen);
+  panelOpen = name !== 'work';   // still blocks drag + hover on both non-Work tabs
+  stage.classList.toggle('dimmed', name === 'careers');
+  setSphereMode(name === 'about');
+  if (name === 'about') document.getElementById('hint').classList.add('gone');
 }
 tabBtns.forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
 // initial placement shouldn't play the bounce — only user-triggered switches should
