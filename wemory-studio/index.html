@@ -279,7 +279,7 @@
     background:rgba(8,8,9,.8); color:#e8e8e6; font-size:13px; line-height:1;
     display:none; align-items:center; justify-content:center; z-index:2;
   }
-  .slot-item.filled:hover .slot-x{ display:flex; }
+  .slot-item:hover .slot-x{ display:flex; }   /* on empty slots too — manual escape hatch, triggers the same auto-shift removeSlot() uses */
   .slot-item .slot-x:hover{ background:#e33; }
   .slot-item .slot-edit{
     position:absolute; top:5px; left:5px; width:24px; height:24px; border-radius:50%;
@@ -2175,7 +2175,7 @@ supabase.auth.onAuthStateChange((_event, session) => setAdminUI(!!session));
 // removeSlot()'s slot-shift, since a shift can change what content lives at
 // every slot number, not just the deleted one, so patching arrays piecemeal
 // isn't safe.
-async function loadWorksData({ rotatePin = false } = {}){
+async function loadWorksData({ rotatePin = false, topUp = true } = {}){
   const { data: rows, error } = await supabase.from('works').select('*');
   if (error) throw error;
   const maxSlot = (rows || []).reduce((m, r) => Math.max(m, r.slot), -1);
@@ -2223,7 +2223,14 @@ async function loadWorksData({ rotatePin = false } = {}){
   // anonymous visitors — gating on isAdmin avoids every regular visitor's
   // page load throwing a wall of permission-denied errors trying to save
   // something they can't; it self-heals next time the owner is logged in.
-  if (isAdmin){
+  // topUp=false lets a caller skip this entirely — compactExistingGaps()
+  // calls loadWorksData() once per gap it closes, and running the top-up
+  // pass on every one of those intermediate calls caused the SAME nearby
+  // source to get picked over and over across calls (pickDuplicateSources's
+  // dedup only works WITHIN one batch, not across separate calls), visibly
+  // flooding the grid with repeats of one image. Top-up should run exactly
+  // once per boot, after the grid has already settled.
+  if (isAdmin && topUp){
     const halfNow = Math.floor(SLOTS / 2);
     const needsFix = [];
     for (let slot = 0; slot < SLOTS; slot++){
@@ -2276,7 +2283,11 @@ async function compactExistingGaps(){
     const { error } = await supabase.rpc('shift_slots_after', { deleted_slot: gap });
     if (error){ console.error(error); break; }
     closedAny = true;
-    await loadWorksData();   // resync urls[] before scanning for the next gap
+    // topUp:false — this loop can run many times in one boot; running the
+    // full top-up/borrow pass on every intermediate resync (instead of once
+    // at the end) is what caused many slots to repeat the same borrowed
+    // image. All we need here is urls[] refreshed to find the next gap.
+    await loadWorksData({ topUp: false });
   }
   return closedAny;
 }
@@ -2287,7 +2298,11 @@ async function compactExistingGaps(){
   const { data: { session } } = await supabase.auth.getSession();
   setAdminUI(!!session);
   try {
-    await loadWorksData();
+    // topUp:false on this first call too — no point borrowing images for
+    // slots compactExistingGaps() might shift away a moment later; the only
+    // topUp pass that should run is the final call below, once the grid has
+    // fully settled
+    await loadWorksData({ topUp: false });
     if (isAdmin) await compactExistingGaps();
     await loadWorksData({ rotatePin: true });
   } catch (err){
