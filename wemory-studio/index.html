@@ -751,27 +751,6 @@ let sphereT0   = 0;        // timestamp of the last mode toggle (drives per-card
 let sphereGlobal = 0;      // eased 0..1 global amount — BG-line fade, bob amplitude, spin easing
 let sphereLastT = 0;       // for per-frame dt (ring spin accumulation)
 const sphereRings = [];    // per latitude ring: { phi, n, spin, thetaOff, scaleRel }
-let sphereMaxDelay = 0;    // latest per-card start delay in the current layout — sizes the fling's cruise phase
-// version "B1" additions — denser ball (borrowed-texture filler tiles between
-// the real on-screen cards, same "borrow a far card's image" idea as the
-// grid's own empty-slot duplicate-of system), everything desaturates as it
-// arrives, and entering About is a fast blurred pan that resolves into the
-// ball instead of individual cards quietly flying to their spots.
-const SPHERE_DENSITY = 1.7;      // ring slot count = round(real cards * this)
-const sphereFillerPool = [];     // reusable card-only meshes (no label) for the extra density
-let sphereFillerActive = 0;      // how many of the pool are in use this layout
-let sphereFlingDirX = 0.86, sphereFlingDirY = -0.32;   // fixed diagonal — consistent feel every time
-const SPHERE_FLING_RAMP = 550;   // ms to accelerate up to peak pan speed
-const SPHERE_FLING_DECEL = 650;  // ms to decelerate back to a stop, once the ball has fully formed
-const SPHERE_FLING_PEAK = 46;    // px/frame at peak — "very fast" pan
-function sphereFlingProfile(elapsed){
-  const holdEnd = sphereMaxDelay + 950 + 120;   // 950 = the per-card morph DUR in the sphere update below
-  if (elapsed < SPHERE_FLING_RAMP) return Math.pow(elapsed / SPHERE_FLING_RAMP, 3);   // ease-in — feels like accelerating
-  if (elapsed < holdEnd) return 1;
-  const dt = (elapsed - holdEnd) / SPHERE_FLING_DECEL;
-  if (dt < 1) return 1 - easeInOutCubic(dt);
-  return 0;
-}
 // subtle "look toward the mouse" parallax (phantom.land-style): the whole dome's
 // viewing angle nudges toward wherever the mouse sits, as if the camera swivelled
 // to glance that way — card WORLD positions (camX/camY) never change, only the
@@ -836,7 +815,7 @@ const maxAniso = renderer ? Math.min(8, renderer.capabilities.getMaxAnisotropy()
    soft, colour-matched glow in from the screen's outer edges instead. We render
    the sharp scene once, blur a half-res copy of it, then additively blend that
    blur back in only near the edges/corners (cards everywhere stay crisp). */
-let sceneRT = null, blurRT1 = null, blurRT2 = null, motionRT = null, motionRT2 = null;
+let sceneRT = null, blurRT1 = null, blurRT2 = null;
 const ppScene  = new THREE.Scene();
 const ppCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const ppQuad   = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
@@ -858,7 +837,6 @@ const BLUR_FRAG = /* glsl */`
 `;
 const EDGE_FRAG = /* glsl */`
   uniform sampler2D uSharp; uniform sampler2D uGlow;
-  uniform sampler2D uMotion; uniform float uMotionAmt;
   varying vec2 vUv;
   void main(){
     vec3 sharpC = texture2D(uSharp, vUv).rgb;
@@ -872,16 +850,10 @@ const EDGE_FRAG = /* glsl */`
     // Pulled the onset in much closer to the true edge and cut the strength,
     // keeping it a subtle corner accent instead of a wash over card content.
     float edge = smoothstep(0.72, 1.0, d);
-    vec3 col = sharpC + glowC * edge * 0.35;
-    // version B1's About-entry fling: blend the WHOLE screen toward a
-    // directionally-streaked blur (not edge-limited like the glow above) as
-    // the scripted pan accelerates, so the ball appears to form out of a fast
-    // blurred sweep instead of individually-flying cards
-    col = mix(col, texture2D(uMotion, vUv).rgb, uMotionAmt);
-    gl_FragColor = vec4(col, 1.0);
+    gl_FragColor = vec4(sharpC + glowC * edge * 0.35, 1.0);
   }
 `;
-let blurMatH = null, blurMatV = null, edgeMat = null, blurMatMotion = null;
+let blurMatH = null, blurMatV = null, edgeMat = null;
 if (renderer){
   blurMatH = new THREE.ShaderMaterial({
     uniforms: { uTex: { value: null }, uDir: { value: new THREE.Vector2(1, 0) }, uTexel: { value: new THREE.Vector2() } },
@@ -891,16 +863,8 @@ if (renderer){
     uniforms: { uTex: { value: null }, uDir: { value: new THREE.Vector2(0, 1) }, uTexel: { value: new THREE.Vector2() } },
     vertexShader: PP_VERT, fragmentShader: BLUR_FRAG, depthTest: false, depthWrite: false,
   });
-  // version B1's About-entry fling — same directional-blur shader as above,
-  // reused with a DYNAMIC direction (the fling's pan direction) and a texel
-  // spread that scales with speed, chained a few passes for a smooth streak
-  // instead of one big-stepped (banded) pass. See the render loop below.
-  blurMatMotion = new THREE.ShaderMaterial({
-    uniforms: { uTex: { value: null }, uDir: { value: new THREE.Vector2(1, 0) }, uTexel: { value: new THREE.Vector2() } },
-    vertexShader: PP_VERT, fragmentShader: BLUR_FRAG, depthTest: false, depthWrite: false,
-  });
   edgeMat = new THREE.ShaderMaterial({
-    uniforms: { uSharp: { value: null }, uGlow: { value: null }, uMotion: { value: null }, uMotionAmt: { value: 0 } },
+    uniforms: { uSharp: { value: null }, uGlow: { value: null } },
     vertexShader: PP_VERT, fragmentShader: EDGE_FRAG, depthTest: false, depthWrite: false,
   });
 }
@@ -938,17 +902,10 @@ function fitViewport(){
       sceneRT = new THREE.WebGLRenderTarget(vw, vh, { ...rtOpts, samples: 4 });
       blurRT1 = new THREE.WebGLRenderTarget(rw, rh, rtOpts);
       blurRT2 = new THREE.WebGLRenderTarget(rw, rh, rtOpts);
-      // version B1's About-entry motion blur — ping-ponged between these two
-      // for the chained directional passes (see the render loop)
-      motionRT  = new THREE.WebGLRenderTarget(rw, rh, rtOpts);
-      motionRT2 = new THREE.WebGLRenderTarget(rw, rh, rtOpts);
-      edgeMat.uniforms.uMotion.value = motionRT.texture;   // any valid texture — only actually blended in when uMotionAmt > 0
     } else {
       sceneRT.setSize(vw, vh);
       blurRT1.setSize(rw, rh);
       blurRT2.setSize(rw, rh);
-      motionRT.setSize(rw, rh);
-      motionRT2.setSize(rw, rh);
     }
     blurMatH.uniforms.uTexel.value.set(1 / vw, 1 / vh);
     blurMatV.uniforms.uTexel.value.set(1 / rw, 1 / rh);
@@ -1066,32 +1023,6 @@ const CARD_FRAG = /* glsl */`
   }
 `;
 
-// sphere-only "filler" cards (version B1): extra tiles that thicken the ball
-// beyond the cards actually on screen, borrowing a distant real card's
-// texture. They have no dome "home" position to fly in from, so instead of
-// blending dome->sphere like domeVert(0,true) above, they simply grow
-// outward from the sphere's own center as their progress ramps — reads as
-// "emerging from within" rather than "arriving from the grid", which nicely
-// separates them from the real cards' motion. Shares CARD_FRAG for texturing.
-const SPHERE_FILLER_VERT = /* glsl */`
-  uniform vec3 uSphC; uniform float uSphR; uniform vec4 uSph;
-  varying vec2 vUv; varying float vShade;
-  void main(){
-    vUv = uv;
-    float sc = length(uSph.xyz);
-    vec3 dirU = uSph.xyz / max(sc, 1e-6);
-    vec3 tX = normalize(cross(vec3(0.0, 1.0, 0.0), dirU));
-    vec3 tY = cross(dirU, tX);
-    float aa = position.x * sc / uSphR;
-    float bb = position.y * sc / uSphR;
-    vec3 dirV = dirU * (cos(aa) * cos(bb)) + tX * (sin(aa) * cos(bb)) + tY * sin(bb);
-    float rNow = uSphR * uSph.w;   // radius itself grows from 0 — the "emerging" look
-    vec3 sUp = uSphC + dirV * rNow;
-    vShade = clamp((1.0 - dirV.z) * 0.55, 0.0, 1.0);
-    gl_Position = projectionMatrix * viewMatrix * vec4(sUp.x, -sUp.y, sUp.z, 1.0);
-  }
-`;
-
 /* meta text sheet: a transparent cell-sized quad bent by the exact same vertex
    shader as its card, so the text's curvature and position always match the card */
 const LABEL_FRAG = /* glsl */`
@@ -1111,10 +1042,6 @@ const LABEL_FRAG = /* glsl */`
 
 const cardGeo  = new THREE.PlaneGeometry(CARD_W, CARD_H, SEG_X, SEG_Y);
 const labelGeo = new THREE.PlaneGeometry(CELL_W, CELL_H, LSEG_X, LSEG_Y);
-// lower tessellation for sphere-filler tiles (version B1) — there can be many
-// more of these than real cards at once, and they only ever need to bend
-// across a modest patch of the ball, not the dome's full range of curvature
-const fillerGeo = new THREE.PlaneGeometry(CARD_W, CARD_H, 24, 14);
 
 /* ================= CURVED GRID LINES + HOVER GLOW (background sheet) ================= */
 /* one big tessellated sheet spanning the whole visible dome, warped identically;
@@ -1249,6 +1176,65 @@ const bgMesh = new THREE.Mesh(
 bgMesh.frustumCulled = false;
 bgMesh.renderOrder = -1;
 scene.add(bgMesh);
+
+/* ================= SPHERE GRAIN (About tab) =================
+   A field of small twinkling points scattered inside the ball's volume —
+   visible through the gaps between cards and on the far hemisphere, like
+   static/film-grain drifting inside the sphere. Positions are baked once
+   (unit-sphere-relative, via rejection sampling for a true uniform-volume
+   spread) and scaled by the SAME uSphC/uSphR uniforms the cards use, so the
+   grain always sits exactly inside whatever sphere is currently on screen
+   without any per-frame position work. */
+const GRAIN_COUNT = 9000;
+const grainPos = new Float32Array(GRAIN_COUNT * 3);
+const grainSeed = new Float32Array(GRAIN_COUNT);
+for (let i = 0; i < GRAIN_COUNT; i++){
+  let x, y, z, d;
+  do { x = Math.random() * 2 - 1; y = Math.random() * 2 - 1; z = Math.random() * 2 - 1; d = x * x + y * y + z * z; }
+  while (d > 1);
+  grainPos[i * 3] = x; grainPos[i * 3 + 1] = y; grainPos[i * 3 + 2] = z;
+  grainSeed[i] = Math.random();
+}
+const grainGeo = new THREE.BufferGeometry();
+grainGeo.setAttribute('position', new THREE.BufferAttribute(grainPos, 3));
+grainGeo.setAttribute('aSeed', new THREE.BufferAttribute(grainSeed, 1));
+const GRAIN_VERT = /* glsl */`
+  uniform vec3 uSphC; uniform float uSphR;
+  attribute float aSeed;
+  varying float vSeed;
+  void main(){
+    vSeed = aSeed;
+    // same y-down-to-y-up flip the card sphere math uses, so the grain lines
+    // up with the same handedness as the ball built from the cards
+    vec3 p = uSphC + vec3(position.x, -position.y, position.z) * uSphR;
+    vec4 mv = viewMatrix * vec4(p, 1.0);
+    gl_Position = projectionMatrix * mv;
+    gl_PointSize = (1.3 + 1.8 * fract(aSeed * 13.7)) * (420.0 / -mv.z);
+  }
+`;
+const GRAIN_FRAG = /* glsl */`
+  uniform float uTime; uniform float uAmt;
+  varying float vSeed;
+  void main(){
+    vec2 uv = gl_PointCoord - 0.5;
+    float d = length(uv);
+    if (d > 0.5) discard;
+    float soft = smoothstep(0.5, 0.0, d);
+    // per-point flicker: a sine wave whose speed and phase both come from the
+    // point's own baked seed, so points twinkle out of sync with each other
+    float tw = 0.3 + 0.7 * (0.5 + 0.5 * sin(uTime * (0.7 + fract(vSeed * 7.3) * 2.3) + vSeed * 62.83));
+    gl_FragColor = vec4(vec3(1.0), soft * tw * uAmt * 0.9);
+  }
+`;
+const grainMat = new THREE.ShaderMaterial({
+  uniforms: { uSphC: U.uSphC, uSphR: U.uSphR, uTime: { value: 0 }, uAmt: { value: 0 } },
+  vertexShader: GRAIN_VERT, fragmentShader: GRAIN_FRAG,
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+});
+const grainMesh = new THREE.Points(grainGeo, grainMat);
+grainMesh.frustumCulled = false;
+grainMesh.visible = false;
+scene.add(grainMesh);
 
 /* ================= PLACEHOLDER TEXTURE (shared by every empty slot) ================= */
 const phCanvas = document.createElement('canvas');
@@ -1505,28 +1491,6 @@ function recycle(entry){
   pool.push(entry);
 }
 
-// sphere-only filler entry (version B1) — card mesh only, no label, no dome
-// state at all; lives entirely in sphereFillerPool (index-addressed, not the
-// key-addressed `cells` map, since these have no grid position of their own)
-function makeSphereFillerEntry(){
-  const sphU = { value: new THREE.Vector4(0, 0, 1, 0) };
-  const mat = new THREE.ShaderMaterial({
-    uniforms: { uMap: { value: placeholderTex }, uHover: { value: 0 }, uInvert: { value: 0 }, uMono: { value: 0 },
-                uSph: sphU, uSphC: U.uSphC, uSphR: U.uSphR },
-    vertexShader: SPHERE_FILLER_VERT, fragmentShader: CARD_FRAG,
-    side: THREE.DoubleSide,
-  });
-  const mesh = new THREE.Mesh(fillerGeo, mat);
-  mesh.frustumCulled = false;
-  mesh.visible = false;
-  scene.add(mesh);
-  return { mesh, mat, sphU, ring: 0, baseTheta: 0, delay: 0, startProg: 0 };
-}
-function getSphereFillerEntry(i){
-  while (sphereFillerPool.length <= i) sphereFillerPool.push(makeSphereFillerEntry());
-  return sphereFillerPool[i];
-}
-
 function refreshSlotEverywhere(slot){
   dropSlotTextures(slot);
   for (const entry of cells.values()){
@@ -1576,11 +1540,9 @@ function axisExtent(halfVp, ang, cellSpan){
 function easeInOutCubic(t){ return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
 
 // Map the cards currently on screen onto latitude rings of a ball: each grid
-// row = one ring, cards spread evenly around its full circle, THICKENED with
-// borrowed-texture filler tiles (version B1 — the ball read as too loose with
-// just the on-screen cards alone). Called on entering sphere mode, and again
-// if the working set changes mid-sphere (rare — e.g. an admin delete flushes
-// the cells) so no card is ever left without a target.
+// row = one ring, cards spread evenly around its full circle. Called on entering
+// sphere mode, and again if the working set changes mid-sphere (rare — e.g. an
+// admin delete flushes the cells) so no card is ever left without a target.
 function buildSphereLayout(){
   const rows = new Map();
   for (const entry of cells.values()){
@@ -1596,17 +1558,10 @@ function buildSphereLayout(){
   const phiStep = ringCount > 1 ? phiSpread / (ringCount - 1) : 0.5;
   const oldOff = sphereRings.map(g => g.thetaOff);   // keep spin phase across a mid-sphere rebuild
   sphereRings.length = 0;
-  // shuffled pool of every real slot currently on the ball — filler tiles
-  // borrow from this, consumed in shuffled order so a filler's source is
-  // essentially uncorrelated with where it actually lands (far from its own
-  // real position on the ball, per the "don't make the duplicate obvious" ask)
-  const sourceSlots = shuffle([...cells.values()].map(e => e.slot));
-  let sourceCursor = 0, fillerCursor = 0, maxDelay = 0;
   rKeys.forEach((r, k) => {
     const entries = rows.get(r).sort((a, b) => a.wx - b.wx);
     const phi = ringCount > 1 ? phiSpread / 2 - phiStep * k : 0;
-    const realN = entries.length;
-    const n = Math.max(realN, Math.round(realN * SPHERE_DENSITY));
+    const n = entries.length;
     // card size on the ball, relative to R: fit within this ring's horizontal
     // chord between neighbors AND the vertical arc to the next ring
     // NOTE units: chordRel/phiStep are relative to R (unitless), CARD_W/H are
@@ -1614,38 +1569,23 @@ function buildSphereLayout(){
     // it back up by R. The floor only guards against a degenerate zero.
     const chordRel = 2 * Math.sin(Math.PI / Math.max(n, 2)) * Math.cos(phi);
     const scaleRel = Math.max(0.0002, Math.min(chordRel * 0.9 / CARD_W, phiStep * 0.86 / CARD_H));
-    const thetaOff = oldOff[k] !== undefined ? oldOff[k] : 0;
-    sphereRings.push({ phi, n, spin: k % 2 ? 1 : -1, thetaOff, scaleRel });
+    sphereRings.push({
+      phi, n,
+      spin: k % 2 ? 1 : -1,   // adjacent rows spin opposite ways — explicit request
+      thetaOff: oldOff[k] !== undefined ? oldOff[k] : 0,
+      scaleRel,
+    });
     entries.forEach((entry, j) => {
-      const delay = k * 90 + mulberry32(entry.slot * 7919 + 13)() * 260;
-      maxDelay = Math.max(maxDelay, delay);
       entry.sph = {
         ring: k,
         baseTheta: (j / n) * Math.PI * 2,
         // stagger: rings start outside-in with a per-card jitter, so the grid
         // dissolves organically instead of snapping row-by-row
-        delay,
+        delay: k * 90 + mulberry32(entry.slot * 7919 + 13)() * 260,
         startProg: entry.sphU.value.w,   // mid-flight toggles morph from wherever the card already is
       };
     });
-    // filler tiles fill out [realN, n) — spread among the same theta slots,
-    // starting shortly after the real cards begin arriving so they read as
-    // "the ball thickening" rather than popping in ahead of the real motion
-    for (let j = realN; j < n; j++){
-      const filler = getSphereFillerEntry(fillerCursor++);
-      const delay = 260 + k * 90 + mulberry32(fillerCursor * 5303 + 41)() * 260;
-      maxDelay = Math.max(maxDelay, delay);
-      filler.ring = k;
-      filler.baseTheta = (j / n) * Math.PI * 2;
-      filler.delay = delay;
-      filler.startProg = filler.sphU.value.w;
-      filler.mat.uniforms.uMap.value = slotTexture(sourceSlots[sourceCursor++ % sourceSlots.length]);
-      filler.mesh.visible = true;
-    }
   });
-  for (let i = fillerCursor; i < sphereFillerActive; i++) sphereFillerPool[i].mesh.visible = false;
-  sphereFillerActive = fillerCursor;
-  sphereMaxDelay = maxDelay;
 }
 
 function setSphereMode(on){
@@ -1659,30 +1599,13 @@ function setSphereMode(on){
   } else {
     for (const entry of cells.values())
       if (entry.sph) entry.sph.startProg = entry.sphU.value.w;
-    for (let i = 0; i < sphereFillerActive; i++) sphereFillerPool[i].startProg = sphereFillerPool[i].sphU.value.w;
   }
 }
 
 /* ================= RENDER LOOP ================= */
 const needed = new Set();
 function frame(){
-  // version B1: entering About scripts a fast diagonal pan instead of the
-  // normal drag-inertia physics — accelerate, cruise at peak speed through
-  // the whole ball-forming window (hidden by the motion blur below), then
-  // decelerate to a stop right as the ball finishes settling. The sphere's
-  // own position math is camera-independent (see domeVert's sphere branch),
-  // so once a card's morph hits w=1 this panning no longer affects it at
-  // all — it only matters for the visual of the OLD dome position racing by
-  // during the blend. flingAmt is reused below to drive the motion-blur pass.
-  let flingAmt = 0;
-  if (sphereMode){
-    flingAmt = reduceMotion ? 0 : sphereFlingProfile(performance.now() - sphereT0);
-  }
-  if (flingAmt > 0.001){
-    camX += sphereFlingDirX * SPHERE_FLING_PEAK * flingAmt;
-    camY += sphereFlingDirY * SPHERE_FLING_PEAK * flingAmt;
-    vx = vy = 0;
-  } else if (!dragging){
+  if (!dragging){
     vx *= FRICTION; vy *= FRICTION;
     if (Math.abs(vx) < 0.02) vx = 0;
     if (Math.abs(vy) < 0.02) vy = 0;
@@ -1718,15 +1641,11 @@ function frame(){
   const camOY = Math.floor(camY / CELL_H) * CELL_H;
   GU.uCamLocal.value.set(camX - camOX, camY - camOY);
 
-  // while any sphere influence is live, the grid-streaming loop below is
-  // skipped ENTIRELY — not just recycling. Version B1's entry fling drives
-  // camX/camY across a large virtual distance for the blur effect, and
-  // without this guard that motion would stream in a trail of brand-new,
-  // sphere-less cells along the flight path (unwanted flat cards flying
-  // through the background, plus wasted texture loads). The ball is built
-  // from exactly the cards that were on screen the moment About was opened;
-  // the working set only needs to survive untouched, never update, for as
-  // long as any sphere influence remains.
+  // while any sphere influence is live, skip the grid-streaming loop
+  // entirely (not just recycling) — the ball is built from exactly the
+  // cards that were on screen when About was opened, and the camera is
+  // frozen anyway (drag disabled, inertia zeroed), so the working set only
+  // needs to survive untouched, never update
   if (!sphereOn){
     const hx = axisExtent(vw / 2, ANG_X, CELL_W);
     const hy = axisExtent(vh / 2, ANG_Y, CELL_H);
@@ -1773,6 +1692,9 @@ function frame(){
     const bobY = reduceMotion ? 0 : Math.sin(now * 0.0011) * 14 * sphereGlobal;
     U.uSphC.value.set(0, bobY, 0);
     U.uSphR.value = R;
+    grainMesh.visible = true;
+    grainMat.uniforms.uTime.value = now * 0.001;
+    grainMat.uniforms.uAmt.value = sphereGlobal;
     let anyActive = false, needRebuild = false;
     for (const entry of cells.values()){
       if (!entry.sph){ needRebuild = true; continue; }
@@ -1783,28 +1705,15 @@ function frame(){
       const theta = s.baseTheta + g.thetaOff;
       const cp = Math.cos(g.phi), sc = g.scaleRel * R;
       entry.sphU.value.set(cp * Math.sin(theta) * sc, Math.sin(g.phi) * sc, cp * Math.cos(theta) * sc, prog);
-      entry.mat.uniforms.uMono.value = prog;   // desaturates as it joins the ball — version B1
-    }
-    // filler tiles (version B1's density fill) — same progress/spin math as
-    // real cards, just addressed through the flat pool instead of `cells`
-    for (let i = 0; i < sphereFillerActive; i++){
-      const filler = sphereFillerPool[i], g = sphereRings[filler.ring];
-      const t = clamp((now - sphereT0 - filler.delay) / DUR, 0, 1);
-      if (t < 1) anyActive = true;
-      const prog = filler.startProg + (target - filler.startProg) * easeInOutCubic(t);
-      const theta = filler.baseTheta + g.thetaOff;
-      const cp = Math.cos(g.phi), sc = g.scaleRel * R;
-      filler.sphU.value.set(cp * Math.sin(theta) * sc, Math.sin(g.phi) * sc, cp * Math.cos(theta) * sc, prog);
-      filler.mat.uniforms.uMono.value = prog;
+      entry.mat.uniforms.uMono.value = prog;   // desaturates as it joins the ball — kept from B1 per request
     }
     if (needRebuild) buildSphereLayout();
     if (!sphereMode && !anyActive && sphereGlobal < 0.01){
       sphereOn = false;
       sphereGlobal = 0;
       GU.uSphG.value = 0;
+      grainMesh.visible = false;
       for (const entry of cells.values()){ entry.sphU.value.w = 0; entry.mat.uniforms.uMono.value = 0; }
-      for (let i = 0; i < sphereFillerActive; i++) sphereFillerPool[i].mesh.visible = false;
-      sphereFillerActive = 0;
     }
   }
 
@@ -1923,28 +1832,6 @@ function frame(){
     ppPass(blurMatH, blurRT1);
     blurMatV.uniforms.uTex.value = blurRT1.texture;
     ppPass(blurMatV, blurRT2);
-
-    // version B1's About-entry motion blur — chain a few directional passes
-    // (ping-ponged between two targets) along the fling's pan direction,
-    // spread scaling with speed. Chaining several modest-step passes reads as
-    // a smooth streak; one single big-stepped pass looks banded/ghosted.
-    if (flingAmt > 0.01){
-      const dirLen = Math.hypot(sphereFlingDirX, sphereFlingDirY) || 1;
-      blurMatMotion.uniforms.uDir.value.set(sphereFlingDirX / dirLen, sphereFlingDirY / dirLen);
-      const rw = motionRT.width, rh = motionRT.height;
-      const spread = 1 + flingAmt * 5;
-      blurMatMotion.uniforms.uTexel.value.set(spread / rw, spread / rh);
-      let src = sceneRT.texture, dst = motionRT, other = motionRT2;
-      const passes = 1 + Math.round(flingAmt * 3);
-      for (let i = 0; i < passes; i++){
-        blurMatMotion.uniforms.uTex.value = src;
-        ppPass(blurMatMotion, dst);
-        src = dst.texture;
-        [dst, other] = [other, dst];
-      }
-      edgeMat.uniforms.uMotion.value = src;
-    }
-    edgeMat.uniforms.uMotionAmt.value = flingAmt;
 
     edgeMat.uniforms.uSharp.value = sceneRT.texture;
     edgeMat.uniforms.uGlow.value  = blurRT2.texture;
