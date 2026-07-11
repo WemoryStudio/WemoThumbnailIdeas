@@ -1177,41 +1177,54 @@ bgMesh.frustumCulled = false;
 bgMesh.renderOrder = -1;
 scene.add(bgMesh);
 
-/* ================= SPHERE GRAIN (About tab) =================
-   A field of small twinkling points scattered inside the ball's volume —
-   visible through the gaps between cards and on the far hemisphere, like
-   static/film-grain drifting inside the sphere. Each point continuously
-   ORBITS its own baked home position around its own random axis at its own
-   random speed ("trapped bees" — every point moving independently, none in
-   sync), plus a small fast wobble layered on top so the motion reads as
-   buzzing rather than a perfectly smooth swirl. Rotation preserves each
-   point's distance from center exactly, so it can never drift outside the
-   ball — no clamping needed. Positions/axes are baked once (unit-sphere-
-   relative, via rejection sampling for a true uniform-volume spread) and
-   scaled by the SAME uSphC/uSphR uniforms the cards use, so the grain
-   always sits exactly inside whatever sphere is currently on screen. */
-const GRAIN_COUNT = 45000;   // 5x the original density, per request
-const grainPos = new Float32Array(GRAIN_COUNT * 3);
-const grainAxis = new Float32Array(GRAIN_COUNT * 3);
-const grainSeed = new Float32Array(GRAIN_COUNT);
-for (let i = 0; i < GRAIN_COUNT; i++){
-  let x, y, z, d;
-  do { x = Math.random() * 2 - 1; y = Math.random() * 2 - 1; z = Math.random() * 2 - 1; d = x * x + y * y + z * z; }
-  while (d > 1);
-  grainPos[i * 3] = x; grainPos[i * 3 + 1] = y; grainPos[i * 3 + 2] = z;
-  let ax, ay, az, al;
-  do { ax = Math.random() * 2 - 1; ay = Math.random() * 2 - 1; az = Math.random() * 2 - 1; al = ax * ax + ay * ay + az * az; }
-  while (al > 1 || al < 0.0001);
-  al = Math.sqrt(al);
-  grainAxis[i * 3] = ax / al; grainAxis[i * 3 + 1] = ay / al; grainAxis[i * 3 + 2] = az / al;
-  grainSeed[i] = Math.random();
+/* ================= SPHERE GRAIN + DUST (About tab) =================
+   Two point-cloud effects living inside the ball's volume, sharing the same
+   underlying motion (see sphereParticleVert below):
+   - GRAIN: small white sparkling points ("trapped bees") — additive glow.
+   - DUST: fewer, much bigger, soft BLACK blobs (normal blending, so they
+     actually darken/occlude whatever's already drawn) — haze that keeps the
+     far hemisphere's cards from reading too clearly through the gaps.
+   Both continuously ORBIT their own baked home position around their own
+   random axis at their own random speed, plus a small fast wobble on top
+   (buzzing rather than a perfectly smooth swirl). Rotation preserves each
+   point's distance from center exactly, so motion can never drift outside
+   the ball — no clamping needed. On top of that, entering About plays a
+   one-time swarm-in: every point starts scattered high above the ball,
+   funnels down through a small opening at the ball's TOP POLE, then
+   disperses out to its own orbiting home — like bees entering a hive
+   through a narrow gap (a quadratic Bezier through above -> pole -> home,
+   staggered per point via its own seed, entirely computed in the vertex
+   shader so it costs nothing extra in JS per frame). Positions/axes are
+   baked once (unit-sphere-relative, via rejection sampling for a true
+   uniform-volume spread) and everything scales off the SAME uSphC/uSphR
+   uniforms the cards use, so both effects always sit exactly inside
+   whatever sphere is currently on screen. */
+function makeSphereParticleGeo(count){
+  const pos = new Float32Array(count * 3);
+  const axis = new Float32Array(count * 3);
+  const seed = new Float32Array(count);
+  for (let i = 0; i < count; i++){
+    let x, y, z, d;
+    do { x = Math.random() * 2 - 1; y = Math.random() * 2 - 1; z = Math.random() * 2 - 1; d = x * x + y * y + z * z; }
+    while (d > 1);
+    pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
+    let ax, ay, az, al;
+    do { ax = Math.random() * 2 - 1; ay = Math.random() * 2 - 1; az = Math.random() * 2 - 1; al = ax * ax + ay * ay + az * az; }
+    while (al > 1 || al < 0.0001);
+    al = Math.sqrt(al);
+    axis[i * 3] = ax / al; axis[i * 3 + 1] = ay / al; axis[i * 3 + 2] = az / al;
+    seed[i] = Math.random();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aAxis', new THREE.BufferAttribute(axis, 3));
+  geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+  return geo;
 }
-const grainGeo = new THREE.BufferGeometry();
-grainGeo.setAttribute('position', new THREE.BufferAttribute(grainPos, 3));
-grainGeo.setAttribute('aAxis', new THREE.BufferAttribute(grainAxis, 3));
-grainGeo.setAttribute('aSeed', new THREE.BufferAttribute(grainSeed, 1));
-const GRAIN_VERT = /* glsl */`
-  uniform vec3 uSphC; uniform float uSphR; uniform float uTime;
+// baseSize/sizeVar control gl_PointSize only — grain uses tiny sizes (sparkle
+// points), dust uses much bigger ones (soft blobs that overlap into haze)
+function sphereParticleVert(baseSize, sizeVar){ return /* glsl */`
+  uniform vec3 uSphC; uniform float uSphR; uniform float uTime; uniform float uEntryT;
   attribute vec3 aAxis;
   attribute float aSeed;
   varying float vSeed;
@@ -1232,15 +1245,28 @@ const GRAIN_VERT = /* glsl */`
       sin(uTime * 2.7 + aSeed * 23.0),
       sin(uTime * 3.6 + aSeed * 37.0)
     ) * 0.05;
-    vec3 local = orbited + wobble;
-    // same y-down-to-y-up flip the card sphere math uses, so the grain lines
-    // up with the same handedness as the ball built from the cards
+    vec3 target = orbited + wobble;
+    // entry swarm: quadratic Bezier from "scattered high above" (P0) through
+    // "a small pole opening" (P1, shared/narrow) to this point's own orbiting
+    // home (P2 = target, evaluated live — so the curve hands off seamlessly
+    // into continuous orbiting the instant it finishes). Staggered per point
+    // via its own seed, entirely in-shader.
+    float delay = fract(aSeed * 91.7) * 1.1;
+    float dur = 0.9 + fract(aSeed * 41.3) * 0.5;
+    float et = clamp((uEntryT - delay) / dur, 0.0, 1.0);
+    et = et * et * (3.0 - 2.0 * et);   // smoothstep ease
+    vec3 above = vec3((fract(aSeed * 53.1) - 0.5) * 1.6, 2.3 + fract(aSeed * 29.3) * 0.8, (fract(aSeed * 71.7) - 0.5) * 1.6);
+    vec3 pole  = vec3((fract(aSeed * 13.3) - 0.5) * 0.06, 1.02, (fract(aSeed * 37.9) - 0.5) * 0.06);
+    float ei = 1.0 - et;
+    vec3 local = ei * ei * above + 2.0 * ei * et * pole + et * et * target;
+    // same y-down-to-y-up flip the card sphere math uses, so the particles
+    // line up with the same handedness as the ball built from the cards
     vec3 p = uSphC + vec3(local.x, -local.y, local.z) * uSphR;
     vec4 mv = viewMatrix * vec4(p, 1.0);
     gl_Position = projectionMatrix * mv;
-    gl_PointSize = (1.3 + 1.8 * fract(aSeed * 13.7)) * (420.0 / -mv.z);
+    gl_PointSize = (${baseSize.toFixed(1)} + ${sizeVar.toFixed(1)} * fract(aSeed * 13.7)) * (420.0 / -mv.z);
   }
-`;
+`; }
 const GRAIN_FRAG = /* glsl */`
   uniform float uTime; uniform float uAmt;
   varying float vSeed;
@@ -1255,15 +1281,42 @@ const GRAIN_FRAG = /* glsl */`
     gl_FragColor = vec4(vec3(1.0), soft * tw * uAmt * 0.9);
   }
 `;
+const DUST_FRAG = /* glsl */`
+  uniform float uAmt;
+  void main(){
+    vec2 uv = gl_PointCoord - 0.5;
+    float d = length(uv);
+    if (d > 0.5) discard;
+    float soft = smoothstep(0.5, 0.0, d);
+    gl_FragColor = vec4(0.0, 0.0, 0.0, soft * uAmt * 0.55);
+  }
+`;
+// shared clock uniforms — one pair, referenced by both grain and dust
+// materials (same pattern as U.uSphC/uSphR for the cards), so frame() only
+// has to update them once for both effects
+const PU = { uTime: { value: 0 }, uEntryT: { value: 0 } };
+
+const GRAIN_COUNT = 45000;   // 5x the original density, per earlier request
 const grainMat = new THREE.ShaderMaterial({
-  uniforms: { uSphC: U.uSphC, uSphR: U.uSphR, uTime: { value: 0 }, uAmt: { value: 0 } },
-  vertexShader: GRAIN_VERT, fragmentShader: GRAIN_FRAG,
+  uniforms: { uSphC: U.uSphC, uSphR: U.uSphR, uTime: PU.uTime, uEntryT: PU.uEntryT, uAmt: { value: 0 } },
+  vertexShader: sphereParticleVert(1.3, 1.8), fragmentShader: GRAIN_FRAG,
   transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
 });
-const grainMesh = new THREE.Points(grainGeo, grainMat);
+const grainMesh = new THREE.Points(makeSphereParticleGeo(GRAIN_COUNT), grainMat);
 grainMesh.frustumCulled = false;
 grainMesh.visible = false;
 scene.add(grainMesh);
+
+const DUST_COUNT = 4000;   // fewer, much bigger — a haze, not a sparkle field
+const dustMat = new THREE.ShaderMaterial({
+  uniforms: { uSphC: U.uSphC, uSphR: U.uSphR, uTime: PU.uTime, uEntryT: PU.uEntryT, uAmt: { value: 0 } },
+  vertexShader: sphereParticleVert(16.0, 12.0), fragmentShader: DUST_FRAG,
+  transparent: true, depthWrite: false,   // normal (default) blending — dark particles darken whatever's already drawn, unlike grain's additive glow
+});
+const dustMesh = new THREE.Points(makeSphereParticleGeo(DUST_COUNT), dustMat);
+dustMesh.frustumCulled = false;
+dustMesh.visible = false;
+scene.add(dustMesh);
 
 /* ================= PLACEHOLDER TEXTURE (shared by every empty slot) ================= */
 const phCanvas = document.createElement('canvas');
@@ -1722,8 +1775,11 @@ function frame(){
     U.uSphC.value.set(0, bobY, 0);
     U.uSphR.value = R;
     grainMesh.visible = true;
-    grainMat.uniforms.uTime.value = now * 0.001;
+    dustMesh.visible = true;
+    PU.uTime.value = now * 0.001;
+    PU.uEntryT.value = (now - sphereT0) / 1000;   // drives the pole-entry swarm-in, in-shader — resets (and replays) on every mode toggle
     grainMat.uniforms.uAmt.value = sphereGlobal;
+    dustMat.uniforms.uAmt.value = sphereGlobal;
     let anyActive = false, needRebuild = false;
     for (const entry of cells.values()){
       if (!entry.sph){ needRebuild = true; continue; }
@@ -1742,6 +1798,7 @@ function frame(){
       sphereGlobal = 0;
       GU.uSphG.value = 0;
       grainMesh.visible = false;
+      dustMesh.visible = false;
       for (const entry of cells.values()){ entry.sphU.value.w = 0; entry.mat.uniforms.uMono.value = 0; }
     }
   }
