@@ -950,7 +950,9 @@ function domeVert(zOff, withSphere = false){ return /* glsl */`
   uniform vec2 uVp; uniform vec2 uAng; uniform vec2 uCellPos; uniform vec2 uLook;
   ${withSphere ? 'uniform vec4 uSph; uniform vec3 uSphC; uniform float uSphR;' : ''}
   varying vec2 vUv; varying float vShade;
+  ${withSphere ? 'varying float vSphW;' : ''}
   void main(){
+    ${withSphere ? 'vSphW = uSph.w;' : ''}
     vUv = uv;
     // world position of this vertex, y-down like the page
     vec2 w = uCellPos + vec2(position.x, -position.y);
@@ -1000,15 +1002,25 @@ function domeVert(zOff, withSphere = false){ return /* glsl */`
 
 const CARD_FRAG = /* glsl */`
   uniform sampler2D uMap; uniform float uHover; uniform float uInvert; uniform float uMono;
-  varying vec2 vUv; varying float vShade;
+  varying vec2 vUv; varying float vShade; varying float vSphW;
   void main(){
     // at extreme curvature a few triangles near the clamp boundary can turn
     // almost degenerate, and perspective-correct interpolation can then overshoot
     // vUv slightly outside 0..1 — clamping here keeps the texture sample sane
     vec2 uv = clamp(vUv, 0.0, 1.0);
-    // artwork stays sharp at every angle — phantom.land doesn't blur the cards
-    // themselves, it adds a colored glow at the screen edges instead (post-process)
-    vec3 col = texture2D(uMap, uv).rgb;
+    // sphere mode's far hemisphere only (vSphW>0 AND vShade high — near-side
+    // sphere cards and every normal dome card stay untouched): a soft mip-bias
+    // blur, so cards glimpsed through the gaps on the far side of the ball
+    // read as a hazy backdrop instead of competing for attention with the
+    // near cards. Deliberately scoped this narrowly — mip-bias blur on cards
+    // in general was tried and rejected years ago (blocky on real photos),
+    // this is a different, much smaller case.
+    float farAmt = vSphW * clamp(vShade, 0.0, 1.0);
+    float blurBias = farAmt * 3.2;
+    // artwork stays sharp at every angle in normal dome mode — phantom.land
+    // doesn't blur the cards themselves, it adds a colored glow at the screen
+    // edges instead (post-process); farAmt is 0 there, so bias is always 0
+    vec3 col = texture2D(uMap, uv, blurBias).rgb;
     // "before" mode's stand-in for a card with no before image: invert the
     // artwork itself right on the card instead of any separate indicator
     col = mix(col, vec3(1.0) - col, uInvert);
@@ -1016,8 +1028,11 @@ const CARD_FRAG = /* glsl */`
     // invert above (film-negative look) — desaturate to luminance
     float lum = dot(col, vec3(0.299, 0.587, 0.114));
     col = mix(col, vec3(lum), uMono);
-    // cards darken as they turn away — depth cue, like the reference
-    col *= 1.0 - 0.5 * clamp(vShade, 0.0, 1.0);
+    // cards darken as they turn away — depth cue, like the reference. Sphere
+    // mode's far hemisphere gets darkened further on top (mix 0.5 -> 0.85),
+    // same farAmt gate so normal dome cards and the ball's near side are
+    // completely unaffected
+    col *= 1.0 - mix(0.5, 0.85, vSphW) * clamp(vShade, 0.0, 1.0);
     col *= 1.0 + 0.10 * uHover;
     gl_FragColor = vec4(col, 1.0);
   }
@@ -1244,6 +1259,12 @@ function sphereParticleVert(baseSize, sizeVar, speedMul, wobbleAmt, wobbleFreqMu
       sin(uTime * 3.6 * ${wobbleFreqMul.toFixed(2)} + aSeed * 37.0)
     ) * ${wobbleAmt.toFixed(2)};
     vec3 target = orbited + wobble;
+    // the wobble can push a point's distance from center past what rotation
+    // alone preserves (rotation keeps |orbited| == |home| <= 1, but adding
+    // wobble on top doesn't) — clamp back so no point can ever poke through
+    // the ball's own surface once settled into its orbit
+    float tlen = length(target);
+    if (tlen > 0.97) target *= 0.97 / tlen;
     // entry swarm: quadratic Bezier from "scattered high above" (P0) through
     // "a small pole opening" (P1, shared/narrow) to this point's own orbiting
     // home (P2 = target, evaluated live — so the curve hands off seamlessly
