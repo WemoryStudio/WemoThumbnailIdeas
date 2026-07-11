@@ -1222,8 +1222,11 @@ function makeSphereParticleGeo(count){
   return geo;
 }
 // baseSize/sizeVar control gl_PointSize only — grain uses tiny sizes (sparkle
-// points), dust uses much bigger ones (soft blobs that overlap into haze)
-function sphereParticleVert(baseSize, sizeVar){ return /* glsl */`
+// points), dust uses much bigger ones (soft blobs that overlap into haze).
+// speedMul/wobbleAmt/wobbleFreqMul let grain ("bees" — fast orbit, small
+// fast wobble) and dust ("smoke" — slow orbit, big slow billow) share this
+// exact same motion code while feeling completely different.
+function sphereParticleVert(baseSize, sizeVar, speedMul, wobbleAmt, wobbleFreqMul){ return /* glsl */`
   uniform vec3 uSphC; uniform float uSphR; uniform float uTime; uniform float uEntryT;
   attribute vec3 aAxis;
   attribute float aSeed;
@@ -1233,18 +1236,18 @@ function sphereParticleVert(baseSize, sizeVar){ return /* glsl */`
     // orbit the point's baked home position around its own random axis —
     // Rodrigues' rotation formula. Distance from origin is preserved exactly,
     // so the point stays on its own fixed-radius shell forever.
-    float speed = 0.12 + fract(aSeed * 17.13) * 0.7;
+    float speed = (0.12 + fract(aSeed * 17.13) * 0.7) * ${speedMul.toFixed(2)};
     float angle = uTime * speed + aSeed * 6.2831853;
     float c = cos(angle), s = sin(angle);
     vec3 home = position;
     vec3 orbited = home * c + cross(aAxis, home) * s + aAxis * dot(aAxis, home) * (1.0 - c);
-    // small fast wobble layered on top, own frequency per point — breaks up
-    // the perfectly circular orbit into something closer to buzzing/darting
+    // wobble layered on top, own frequency per point — breaks up the
+    // perfectly circular orbit (fast+small = buzzing bees, slow+big = billowing smoke)
     vec3 wobble = vec3(
-      sin(uTime * 3.1 + aSeed * 11.0),
-      sin(uTime * 2.7 + aSeed * 23.0),
-      sin(uTime * 3.6 + aSeed * 37.0)
-    ) * 0.05;
+      sin(uTime * 3.1 * ${wobbleFreqMul.toFixed(2)} + aSeed * 11.0),
+      sin(uTime * 2.7 * ${wobbleFreqMul.toFixed(2)} + aSeed * 23.0),
+      sin(uTime * 3.6 * ${wobbleFreqMul.toFixed(2)} + aSeed * 37.0)
+    ) * ${wobbleAmt.toFixed(2)};
     vec3 target = orbited + wobble;
     // entry swarm: quadratic Bezier from "scattered high above" (P0) through
     // "a small pole opening" (P1, shared/narrow) to this point's own orbiting
@@ -1282,13 +1285,26 @@ const GRAIN_FRAG = /* glsl */`
   }
 `;
 const DUST_FRAG = /* glsl */`
-  uniform float uAmt;
+  uniform float uTime; uniform float uAmt;
+  varying float vSeed;
+  float hash21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+  float vnoise(vec2 p){
+    vec2 i = floor(p), f = fract(p);
+    float a = hash21(i), b = hash21(i + vec2(1.0, 0.0)), c = hash21(i + vec2(0.0, 1.0)), d = hash21(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  }
   void main(){
     vec2 uv = gl_PointCoord - 0.5;
-    float d = length(uv);
-    if (d > 0.5) discard;
-    float soft = smoothstep(0.5, 0.0, d);
-    gl_FragColor = vec4(0.0, 0.0, 0.0, soft * uAmt * 0.55);
+    float d = length(uv) * 2.0;   // 0 at center, 1 at the point's edge
+    if (d > 1.0) discard;
+    // domain-warped noise, offset per point (vSeed) and drifting with uTime —
+    // the puff's own internal texture shifts/flows over time, not just its
+    // outer position, which is what reads as smoke/liquid instead of a flat dot
+    vec2 np = uv * 3.0 + vec2(vSeed * 40.0, vSeed * 71.0) + uTime * 0.1;
+    float n = vnoise(np) * 0.6 + vnoise(np * 2.3 + 5.0) * 0.4;
+    float shape = smoothstep(1.0, 0.1, d) * (0.5 + 0.6 * n);
+    gl_FragColor = vec4(0.0, 0.0, 0.0, clamp(shape, 0.0, 1.0) * uAmt * 0.65);
   }
 `;
 // shared clock uniforms — one pair, referenced by both grain and dust
@@ -1299,7 +1315,8 @@ const PU = { uTime: { value: 0 }, uEntryT: { value: 0 } };
 const GRAIN_COUNT = 45000;   // 5x the original density, per earlier request
 const grainMat = new THREE.ShaderMaterial({
   uniforms: { uSphC: U.uSphC, uSphR: U.uSphR, uTime: PU.uTime, uEntryT: PU.uEntryT, uAmt: { value: 0 } },
-  vertexShader: sphereParticleVert(1.3, 1.8), fragmentShader: GRAIN_FRAG,
+  // "bees": fast orbit (1x), small fast wobble — buzzing/darting
+  vertexShader: sphereParticleVert(1.3, 1.8, 1.0, 0.05, 1.0), fragmentShader: GRAIN_FRAG,
   transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
 });
 const grainMesh = new THREE.Points(makeSphereParticleGeo(GRAIN_COUNT), grainMat);
@@ -1307,10 +1324,11 @@ grainMesh.frustumCulled = false;
 grainMesh.visible = false;
 scene.add(grainMesh);
 
-const DUST_COUNT = 4000;   // fewer, much bigger — a haze, not a sparkle field
+const DUST_COUNT = 5500;   // fewer than grain, but big+noisy enough to read as a continuous haze
 const dustMat = new THREE.ShaderMaterial({
   uniforms: { uSphC: U.uSphC, uSphR: U.uSphR, uTime: PU.uTime, uEntryT: PU.uEntryT, uAmt: { value: 0 } },
-  vertexShader: sphereParticleVert(16.0, 12.0), fragmentShader: DUST_FRAG,
+  // "smoke": slow orbit (0.35x), big slow wobble — billowing, not buzzing
+  vertexShader: sphereParticleVert(20.0, 16.0, 0.35, 0.13, 0.35), fragmentShader: DUST_FRAG,
   transparent: true, depthWrite: false,   // normal (default) blending — dark particles darken whatever's already drawn, unlike grain's additive glow
 });
 const dustMesh = new THREE.Points(makeSphereParticleGeo(DUST_COUNT), dustMat);
