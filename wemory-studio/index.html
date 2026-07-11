@@ -1180,33 +1180,62 @@ scene.add(bgMesh);
 /* ================= SPHERE GRAIN (About tab) =================
    A field of small twinkling points scattered inside the ball's volume —
    visible through the gaps between cards and on the far hemisphere, like
-   static/film-grain drifting inside the sphere. Positions are baked once
-   (unit-sphere-relative, via rejection sampling for a true uniform-volume
-   spread) and scaled by the SAME uSphC/uSphR uniforms the cards use, so the
-   grain always sits exactly inside whatever sphere is currently on screen
-   without any per-frame position work. */
-const GRAIN_COUNT = 9000;
+   static/film-grain drifting inside the sphere. Each point continuously
+   ORBITS its own baked home position around its own random axis at its own
+   random speed ("trapped bees" — every point moving independently, none in
+   sync), plus a small fast wobble layered on top so the motion reads as
+   buzzing rather than a perfectly smooth swirl. Rotation preserves each
+   point's distance from center exactly, so it can never drift outside the
+   ball — no clamping needed. Positions/axes are baked once (unit-sphere-
+   relative, via rejection sampling for a true uniform-volume spread) and
+   scaled by the SAME uSphC/uSphR uniforms the cards use, so the grain
+   always sits exactly inside whatever sphere is currently on screen. */
+const GRAIN_COUNT = 45000;   // 5x the original density, per request
 const grainPos = new Float32Array(GRAIN_COUNT * 3);
+const grainAxis = new Float32Array(GRAIN_COUNT * 3);
 const grainSeed = new Float32Array(GRAIN_COUNT);
 for (let i = 0; i < GRAIN_COUNT; i++){
   let x, y, z, d;
   do { x = Math.random() * 2 - 1; y = Math.random() * 2 - 1; z = Math.random() * 2 - 1; d = x * x + y * y + z * z; }
   while (d > 1);
   grainPos[i * 3] = x; grainPos[i * 3 + 1] = y; grainPos[i * 3 + 2] = z;
+  let ax, ay, az, al;
+  do { ax = Math.random() * 2 - 1; ay = Math.random() * 2 - 1; az = Math.random() * 2 - 1; al = ax * ax + ay * ay + az * az; }
+  while (al > 1 || al < 0.0001);
+  al = Math.sqrt(al);
+  grainAxis[i * 3] = ax / al; grainAxis[i * 3 + 1] = ay / al; grainAxis[i * 3 + 2] = az / al;
   grainSeed[i] = Math.random();
 }
 const grainGeo = new THREE.BufferGeometry();
 grainGeo.setAttribute('position', new THREE.BufferAttribute(grainPos, 3));
+grainGeo.setAttribute('aAxis', new THREE.BufferAttribute(grainAxis, 3));
 grainGeo.setAttribute('aSeed', new THREE.BufferAttribute(grainSeed, 1));
 const GRAIN_VERT = /* glsl */`
-  uniform vec3 uSphC; uniform float uSphR;
+  uniform vec3 uSphC; uniform float uSphR; uniform float uTime;
+  attribute vec3 aAxis;
   attribute float aSeed;
   varying float vSeed;
   void main(){
     vSeed = aSeed;
+    // orbit the point's baked home position around its own random axis —
+    // Rodrigues' rotation formula. Distance from origin is preserved exactly,
+    // so the point stays on its own fixed-radius shell forever.
+    float speed = 0.12 + fract(aSeed * 17.13) * 0.7;
+    float angle = uTime * speed + aSeed * 6.2831853;
+    float c = cos(angle), s = sin(angle);
+    vec3 home = position;
+    vec3 orbited = home * c + cross(aAxis, home) * s + aAxis * dot(aAxis, home) * (1.0 - c);
+    // small fast wobble layered on top, own frequency per point — breaks up
+    // the perfectly circular orbit into something closer to buzzing/darting
+    vec3 wobble = vec3(
+      sin(uTime * 3.1 + aSeed * 11.0),
+      sin(uTime * 2.7 + aSeed * 23.0),
+      sin(uTime * 3.6 + aSeed * 37.0)
+    ) * 0.05;
+    vec3 local = orbited + wobble;
     // same y-down-to-y-up flip the card sphere math uses, so the grain lines
     // up with the same handedness as the ball built from the cards
-    vec3 p = uSphC + vec3(position.x, -position.y, position.z) * uSphR;
+    vec3 p = uSphC + vec3(local.x, -local.y, local.z) * uSphR;
     vec4 mv = viewMatrix * vec4(p, 1.0);
     gl_Position = projectionMatrix * mv;
     gl_PointSize = (1.3 + 1.8 * fract(aSeed * 13.7)) * (420.0 / -mv.z);
