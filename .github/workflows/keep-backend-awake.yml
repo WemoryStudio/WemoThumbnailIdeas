@@ -1,0 +1,32 @@
+# Keeps the Render free-tier backend (wemothumbnailideas.onrender.com) from
+# spinning down. Render sleeps the instance after ~15 idle minutes, which made
+# the first request after reopening the app take 10-30s (cold start). A ping
+# every 10 minutes keeps it warm around the clock.
+#
+# Notes:
+# - GitHub may delay scheduled runs by a few minutes under load; an occasional
+#   cold start can still slip through, but the app's localStorage caches cover
+#   that case too.
+# - GitHub auto-disables schedules in repos with no commits for 60 days; it
+#   just needs a manual re-enable (Actions tab) or any new commit.
+name: Keep backend awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping Render backend
+        run: |
+          code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 120 \
+            "https://wemothumbnailideas.onrender.com/api/auth/me" || echo "000")
+          echo "Backend answered with HTTP $code"
+          # 401 is the expected reply (no auth token sent) - any HTTP status
+          # at all means the instance is awake. Only a full connection
+          # failure (000) marks the run as failed.
+          if [ "$code" = "000" ]; then exit 1; fi
